@@ -71,6 +71,7 @@ type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
 export interface OpenApiDocument {
   openapi: "3.0.3";
   info: { title: string; version: string; description: string };
+  servers: { url: string }[];
   paths: Record<string, Record<string, Json>>;
   components: { schemas: Record<string, Json> };
 }
@@ -169,7 +170,7 @@ function aiResponses(preview: "SummaryPreview" | "TagsPreview", field: "summary"
   };
 }
 
-function build(): OpenApiDocument {
+function build(): Omit<OpenApiDocument, "servers"> {
   return {
     openapi: "3.0.3",
     info: {
@@ -275,9 +276,22 @@ function build(): OpenApiDocument {
   };
 }
 
-let cached: OpenApiDocument | undefined;
+let cached: Omit<OpenApiDocument, "servers"> | undefined;
 
-export function openApiDocument(): OpenApiDocument {
+// A relative URL is the fallback when the request has no usable host. Viewers resolve it
+// against the document URL, so the same file still points at the API that served it.
+export function openApiDocument(serverUrl = "/"): OpenApiDocument {
   cached ??= build();
-  return cached;
+  return { ...cached, servers: [{ url: serverUrl }] };
+}
+
+const SERVER_HOST = /^(?:[a-z0-9.-]+|\[[0-9a-f:]+\])(?::\d{1,5})?$/i;
+
+/** The origin a client used to fetch the document, including the proxy's public host. */
+export function serverUrlFromRequest(req: { protocol: string; get(name: string): string | undefined }): string {
+  const forwardedProto = req.get("x-forwarded-proto")?.split(",")[0]?.trim().toLowerCase();
+  const proto = forwardedProto === "https" || forwardedProto === "http" ? forwardedProto : req.protocol === "https" ? "https" : "http";
+  const host = (req.get("x-forwarded-host") ?? req.get("host") ?? "").split(",")[0]?.trim() ?? "";
+  if (!SERVER_HOST.test(host)) return "/";
+  return `${proto}://${host}`;
 }

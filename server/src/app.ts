@@ -1,11 +1,11 @@
-import express, { type Express } from "express";
+import express, { type Express, type Request, type Response } from "express";
 import type pg from "pg";
 import type { AiProvider } from "./ai/provider.js";
 import { errorHandler, HttpError } from "./errors.js";
 import { createEnricher } from "./notes/enrichment.js";
 import { createNotesRepo } from "./notes/repo.js";
 import { notesRouter } from "./notes/routes.js";
-import { openApiDocument } from "./openapi.js";
+import { openApiDocument, serverUrlFromRequest } from "./openapi.js";
 
 interface AppDeps {
   pool: pg.Pool;
@@ -48,8 +48,23 @@ export function createApp({ pool, ai, staticDir }: AppDeps): App {
     res.json({ status: "ok" });
   });
 
-  app.get("/api/openapi.json", (_req, res) => {
-    res.json(openApiDocument());
+  // Documentation sites (and a local page opened from another origin) fetch this file in the browser.
+  const allowOpenApiFetch = (req: Request, res: Response) => {
+    res.set("access-control-allow-origin", "*");
+    if (req.get("access-control-request-private-network") === "true") {
+      res.set("access-control-allow-private-network", "true");
+    }
+  };
+  app.options("/api/openapi.json", (req, res) => {
+    allowOpenApiFetch(req, res);
+    res.set("access-control-allow-methods", "GET, OPTIONS");
+    const requested = req.get("access-control-request-headers");
+    if (requested) res.set("access-control-allow-headers", requested);
+    res.sendStatus(204);
+  });
+  app.get("/api/openapi.json", (req, res) => {
+    allowOpenApiFetch(req, res);
+    res.json(openApiDocument(serverUrlFromRequest(req)));
   });
 
   const repo = createNotesRepo(pool);

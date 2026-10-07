@@ -74,11 +74,35 @@ describe("GET /api/openapi.json", () => {
     await pool.end();
   });
 
-  it("returns the generated document", async () => {
+  it("returns the generated document for this host", async () => {
     const res = await call(server.url, "GET", "/api/openapi.json");
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual(openApiDocument());
+    expect(res.body).toEqual(openApiDocument(server.url));
+  });
+
+  it("uses the public host when a proxy terminates TLS", async () => {
+    const res = await fetch(`${server.url}/api/openapi.json`, {
+      headers: { "x-forwarded-proto": "https", "x-forwarded-host": "notes.example" },
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ servers: [{ url: "https://notes.example" }] });
+  });
+
+  it("lets a documentation site read the spec", async () => {
+    const res = await fetch(`${server.url}/api/openapi.json`, {
+      method: "OPTIONS",
+      headers: {
+        origin: "https://editor.swagger.io",
+        "access-control-request-method": "GET",
+        "access-control-request-private-network": "true",
+      },
+    });
+
+    expect(res.status).toBe(204);
+    expect(res.headers.get("access-control-allow-origin")).toBe("*");
+    expect(res.headers.get("access-control-allow-private-network")).toBe("true");
   });
 
   it("accepts a note the API stored", async () => {
