@@ -17,6 +17,6 @@ export OPENAI_API_KEY=sk-...   # or rely on .env; AI_PROVIDER=fake needs no key
 - **Secret.** The first run creates the `ai-notes` secret with a generated database password and the API key. Later runs leave it alone, so the password keeps matching the existing disk. The key never enters Terraform state.
 - **Use one script per GKE cluster.** Terraform does not adopt a cluster `gke.sh` created.
 - **After deploy**, `kubectl -n ai-notes rollout status deploy/ai-notes` waits for `/api/health`. The address (the GKE ingress, or the Azure service's external IP) appears after a few minutes.
-- **Timeouts.** The pod grace period and the load balancer timeouts are longer than the server's shutdown drain, so a slow AI call is not cut off. The manifests say why, and `server/test/openai.test.ts` fails if one drops below it.
+- **Timeouts.** The pod grace period and the load balancer timeouts are longer than the server's shutdown drain, so a slow AI call is not cut off. The manifests say why, and `server/test/deploy.test.ts` fails if one drops below it.
 - **Data** survives pod restarts. Deleting the namespace deletes the disk. To move to Cloud SQL, point `DATABASE_URL` at it and drop the StatefulSet; migrations run on boot.
 - **Teardown:** `terraform destroy` in `deploy/terraform/gcp` or `deploy/terraform/azure`. State is local and gitignored.
