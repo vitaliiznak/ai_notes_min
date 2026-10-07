@@ -1,0 +1,6 @@
+{
+  "extends": "./tsconfig.json",
+  // The Playwright specs and their setup run in Node, not in the browser.
+  "compilerOptions": { "types": ["node"] },
+  "include": ["e2e", "playwright.config.ts"]
+}
