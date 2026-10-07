@@ -114,16 +114,17 @@ export function notesRouter(repo: NotesRepo, enrich: Enricher): Router {
     res.json({ note: found(await repo.get(noteId(req))) });
   });
 
-  // POST /notes/:id/summary and /notes/:id/tags. Cached after the first call; ?regenerate=true forces a new one.
+  // Cached after the first call; ?regenerate=true forces a new one.
   // Joins the call a new note started, if it is still running.
   // Accept: text/event-stream sends preview events, then done. Anything else gets one JSON body.
-  for (const field of ["summary", "tags"] satisfies AiField[]) {
-    router.post(`/notes/:id/${field}`, async (req, res) => {
-      const live = await enrich.open(noteId(req), field, { regenerate: req.query.regenerate === "true" });
-      if (wantsStream(req)) await writeStream(res, live);
-      else res.json({ note: found(await live.note) });
-    });
-  }
+  const enrichNote = (field: AiField) => async (req: Request, res: Response) => {
+    const live = await enrich.open(noteId(req), field, { regenerate: req.query.regenerate === "true" });
+    if (wantsStream(req)) await writeStream(res, live);
+    else res.json({ note: found(await live.note) });
+  };
+
+  router.post("/notes/:id/summary", enrichNote("summary"));
+  router.post("/notes/:id/tags", enrichNote("tags"));
 
   return router;
 }
