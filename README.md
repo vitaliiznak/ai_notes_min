@@ -7,14 +7,16 @@ Take-home: a notes app with AI. Saving a note tags it; a note of 500+ characters
 Node 22, Docker.
 
 ```sh
-cp .env.example .env          # OPENAI_API_KEY, or AI_PROVIDER=fake (no key; output starts with "[fake AI]")
-docker compose up -d --wait db
+cp .env.example .env          # paste OPENAI_API_KEY for a local OpenAI run, or set AI_PROVIDER=fake
+docker compose up -d --wait db  # Postgres only
 npm install
-npm run dev:server            # :3000
-npm run dev:web               # http://localhost:5173
+npm run dev:server            # API on :3000; it reads .env and talks to that database
+npm run dev:web               # UI on http://localhost:5173
 ```
 
-`docker compose up --build` serves the UI and API together on :3000.
+or
+
+`docker compose up --build` is the other way: database, API, and UI together on :3000, and you do not run `npm run`.
 Checks: `npm run typecheck` · `npm test` (needs `db`) · `npm run test:e2e` · `npm run build`.
 API reference: [localhost:5173/#/api](http://localhost:5173/#/api), rendered from `GET /api/openapi.json`. That document is CORS-readable, and its `servers` entry is whichever host served it.
 
