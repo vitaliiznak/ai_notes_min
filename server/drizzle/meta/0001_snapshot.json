@@ -1,0 +1,135 @@
+{
+  "id": "4cd64584-e079-42d9-b048-c252bb604ddc",
+  "prevId": "46e7697b-2c6f-437a-b207-3039dc11d0e4",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.notes": {
+      "name": "notes",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "content": {
+          "name": "content",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "summary": {
+          "name": "summary",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "tags": {
+          "name": "tags",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "idempotency_key": {
+          "name": "idempotency_key",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "notes_created_at_idx": {
+          "name": "notes_created_at_idx",
+          "columns": [
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "first"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "first"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "notes_idempotency_key_key": {
+          "name": "notes_idempotency_key_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "idempotency_key"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "notes_title_chk": {
+          "name": "notes_title_chk",
+          "value": "char_length(title) BETWEEN 1 AND 200"
+        },
+        "notes_content_chk": {
+          "name": "notes_content_chk",
+          "value": "char_length(content) BETWEEN 1 AND 20000"
+        },
+        "notes_summary_min_content_chk": {
+          "name": "notes_summary_min_content_chk",
+          "value": "summary IS NULL OR char_length(content) >= 500"
+        },
+        "notes_summary_length_chk": {
+          "name": "notes_summary_length_chk",
+          "value": "summary IS NULL OR char_length(summary) BETWEEN 1 AND 590"
+        },
+        "notes_summary_shorter_chk": {
+          "name": "notes_summary_shorter_chk",
+          "value": "summary IS NULL OR char_length(summary) * 5 <= char_length(content) * 4"
+        },
+        "notes_tags_count_chk": {
+          "name": "notes_tags_count_chk",
+          "value": "cardinality(tags) BETWEEN 1 AND 5"
+        },
+        "notes_tags_length_chk": {
+          "name": "notes_tags_length_chk",
+          "value": "tags IS NULL OR (tags[1] IS NOT NULL AND char_length(tags[1]) BETWEEN 1 AND 40 AND (tags[2] IS NULL OR char_length(tags[2]) BETWEEN 1 AND 40) AND (tags[3] IS NULL OR char_length(tags[3]) BETWEEN 1 AND 40) AND (tags[4] IS NULL OR char_length(tags[4]) BETWEEN 1 AND 40) AND (tags[5] IS NULL OR char_length(tags[5]) BETWEEN 1 AND 40))"
+        }
+      },
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {},
+  "schemas": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}

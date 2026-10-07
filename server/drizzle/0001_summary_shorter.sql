@@ -1,0 +1,2 @@
+ALTER TABLE "notes" DROP CONSTRAINT "notes_summary_shorter_chk";--> statement-breakpoint
+ALTER TABLE "notes" ADD CONSTRAINT "notes_summary_shorter_chk" CHECK (summary IS NULL OR char_length(summary) * 5 <= char_length(content) * 4);
