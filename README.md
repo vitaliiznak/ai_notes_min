@@ -93,6 +93,7 @@ Tests use real Postgres, real HTTP and a scripted model, covering streams and ev
 
 ## Production
 
+- The app title is `AI Notes` on the browser tab, the sidebar, and the API document. Change that same string in `web/index.html` (`<title>`), `APP_TITLE` in `web/src/browser.ts`, the `<h1>` in `web/src/App.tsx`, and `info.title` in `server/src/openapi.ts`.
 - One non-root image serves the API and UI. Migrations run at boot under an advisory lock. A missing API key fails at boot; `/api/health` checks Postgres.
 - Mutations must carry a same-origin `Origin`. Shutdown waits up to 75 s for running AI calls; pod and load-balancer timeouts sit above that, and `deploy.test.ts` fails if one drops below.
 - CI: typecheck, migration drift, unit and e2e tests, build, Docker image ([passing run](https://github.com/vitaliiznak/ai_notes_min/actions/runs/37559208247)).
