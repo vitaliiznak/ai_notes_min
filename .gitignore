@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.env
+task.md
+*.log
+.DS_Store
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
