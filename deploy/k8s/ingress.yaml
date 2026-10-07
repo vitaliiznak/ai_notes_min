@@ -1,0 +1,36 @@
+# GCE's default backend timeout is 30s. An AI call may use the full timeout plus one retry.
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: ai-notes
+  labels:
+    app.kubernetes.io/name: ai-notes
+    app.kubernetes.io/component: api
+spec:
+  timeoutSec: 90
+  connectionDraining:
+    drainingTimeoutSec: 80
+  healthCheck:
+    type: HTTP
+    requestPath: /api/health
+    port: 3000
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ai-notes
+  labels:
+    app.kubernetes.io/name: ai-notes
+    app.kubernetes.io/component: api
+spec:
+  ingressClassName: gce
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ai-notes
+                port:
+                  number: 80

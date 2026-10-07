@@ -1,0 +1,13 @@
+# Azure's idle timeout is in minutes, and 4 is the minimum. That is 240s, above drainBudgetMs.
+# appProtocol http makes the probe use the request path; without it the path is ignored and the probe stays TCP.
+- op: replace
+  path: /metadata/annotations
+  value:
+    service.beta.kubernetes.io/azure-load-balancer-tcp-idle-timeout: "4"
+    service.beta.kubernetes.io/azure-load-balancer-health-probe-request-path: /api/health
+- op: add
+  path: /spec/type
+  value: LoadBalancer
+- op: add
+  path: /spec/ports/0/appProtocol
+  value: http

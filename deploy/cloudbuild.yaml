@@ -1,0 +1,21 @@
+# Builds the repo Dockerfile and pushes it to Artifact Registry.
+# deploy/gke.sh submits this. CLOUD_LOGGING_ONLY needs roles/logging.logWriter
+# on the Cloud Build service account; the script grants that.
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/ai-notes:${_TAG}
+      - .
+
+images:
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/ai-notes:${_TAG}
+
+substitutions:
+  _REGION: europe-west1
+  _REPO: ai-notes
+  _TAG: latest
+
+options:
+  logging: CLOUD_LOGGING_ONLY

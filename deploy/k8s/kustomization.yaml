@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: ai-notes
+resources:
+  - namespace.yaml
+  - postgres.yaml
+  - app.yaml
+  - ingress.yaml
+# deploy/gke.sh fills newName and newTag in a copy. Applying this file unchanged
+# points the Deployment at a placeholder registry path.
+images:
+  - name: ai-notes
+    newName: REGION-docker.pkg.dev/PROJECT_ID/ai-notes/ai-notes
+    newTag: latest

@@ -1,0 +1,12 @@
+.git
+.github
+deploy/k8s
+.terraform
+**/*.tfstate
+**/*.tfstate.*
+**/*.md
+**/node_modules
+**/dist
+.env
+*.log
+.DS_Store
