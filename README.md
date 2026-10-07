@@ -97,9 +97,3 @@ Tests use real Postgres, real HTTP and a scripted model, covering streams and ev
 - Deploys: [cluster, no login](deploy/README.md) · [Azure VM, shared password](deploy/vm/README.md).
 - No rate limit yet: on a public deploy, set a spend limit in the OpenAI dashboard.
 
-## next
-
-1. Observability: request IDs, plus metrics for latency, errors and cache hits.
-2. Rate limiting per client in front of the AI endpoints.
-3. Note editing, with a content hash in the conditional write so an old result can't land on new text.
-4. A job queue (pg-boss) if calls get slower.
