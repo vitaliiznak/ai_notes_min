@@ -1,0 +1,26 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: ai-notes
+# namespace.yaml, postgres.yaml, and app.yaml are copied next to this file by
+# deploy/tf.sh. Kustomize refuses to read them from the parent directory.
+resources:
+  - namespace.yaml
+  - postgres.yaml
+  - app.yaml
+patches:
+  - path: storage.yaml
+    target:
+      group: apps
+      version: v1
+      kind: StatefulSet
+      name: postgres
+  - path: service.yaml
+    target:
+      version: v1
+      kind: Service
+      name: ai-notes
+# deploy/tf.sh rewrites newName and newTag in a copy.
+images:
+  - name: ai-notes
+    newName: ai-notes
+    newTag: latest

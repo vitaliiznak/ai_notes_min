@@ -1,0 +1,12 @@
+{$SITE_HOST} {
+	basic_auth {
+		{$APP_USER} {$APP_PASSWORD_HASH}
+	}
+	header Cache-Control "no-store"
+	reverse_proxy app:3000
+}
+
+# The former IP URL must never bypass authentication.
+http:// {
+	redir https://{$SITE_HOST}{uri} permanent
+}
