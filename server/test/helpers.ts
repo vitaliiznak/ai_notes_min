@@ -63,6 +63,11 @@ interface ApiResponse {
   body: any;
 }
 
+// Node's fetch sends no Origin. A mutation without one is rejected, so tests send the server's own unless a case overrides it.
+export function sameOriginHeaders(baseUrl: string, headers: Record<string, string> = {}): Record<string, string> {
+  return { origin: new URL(baseUrl).origin, ...headers };
+}
+
 export async function call(
   baseUrl: string,
   method: string,
@@ -70,9 +75,10 @@ export async function call(
   body?: unknown,
   headers: Record<string, string> = {},
 ): Promise<ApiResponse> {
+  const sent = sameOriginHeaders(baseUrl, body === undefined ? headers : { "content-type": "application/json", ...headers });
   const res = await fetch(`${baseUrl}${path}`, {
     method,
-    headers: body === undefined ? headers : { "content-type": "application/json", ...headers },
+    headers: sent,
     body: typeof body === "string" ? body : body === undefined ? undefined : JSON.stringify(body),
   });
   return { status: res.status, body: await res.json() };

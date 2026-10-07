@@ -1,4 +1,4 @@
-import { expect, type APIRequestContext, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 
 /** 500+ characters, with `word` as the most frequent one, so the fake provider's first tag is that word. */
 export function longNote(word: string): string {
@@ -10,7 +10,10 @@ export const SHORT_NOTE = { title: "Shopping list", content: "Buy milk and bread
 
 /** Empties the shared notebook, so each spec starts from a known list. */
 export async function clearNotes(request: APIRequestContext): Promise<void> {
-  const response = await request.delete("/api/notes");
+  const baseURL = test.info().project.use.baseURL;
+  if (!baseURL) throw new Error("Playwright baseURL is not set.");
+  // This client is not a browser, so it has to send the Origin a mutation requires.
+  const response = await request.delete("/api/notes", { headers: { origin: new URL(baseURL).origin } });
   expect(response.status()).toBe(200);
 }
 

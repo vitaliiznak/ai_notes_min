@@ -22,12 +22,13 @@ export interface App {
 export function createApp({ pool, ai, staticDir }: AppDeps): App {
   const app = express();
   app.disable("x-powered-by");
-  // Browsers cache Basic credentials at the gateway. Reject cross-site mutations
-  // so another website cannot spend AI calls or change this shared notebook.
+  // Browsers cache Basic credentials at the gateway. Allow a mutation only when
+  // Origin's host is this host. A missing Origin is not same-origin: a script
+  // can omit it and loop ?regenerate=true against the AI key.
   app.use((req, _res, next) => {
     if (!["GET", "HEAD", "OPTIONS"].includes(req.method)) {
       const origin = req.get("origin");
-      let sameOrigin = !origin;
+      let sameOrigin = false;
       try { if (origin) sameOrigin = new URL(origin).host === req.get("host"); } catch { sameOrigin = false; }
       if (!sameOrigin || req.get("sec-fetch-site") === "cross-site") {
         throw new HttpError(403, "cross_site_request", "Cross-site changes are not allowed.");

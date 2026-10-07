@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AiError, type AiErrorCode } from "../src/ai/provider.js";
 import { createPool } from "../src/db.js";
 import { SUMMARY_MAX_CHARS, SUMMARY_MIN_CONTENT } from "../src/notes/limits.js";
-import { call, LONG_NOTE, scriptedAi, startServer, TEST_DATABASE_URL, type TestServer } from "./helpers.js";
+import { call, LONG_NOTE, sameOriginHeaders, scriptedAi, startServer, TEST_DATABASE_URL, type TestServer } from "./helpers.js";
 
 const pool = createPool(TEST_DATABASE_URL);
 const servers: TestServer[] = [];
@@ -32,7 +32,7 @@ function parseSse(body: string): { event: string; data: any }[] {
 async function postStream(api: Awaited<ReturnType<typeof serve>>, path: string) {
   const res = await fetch(`${api.url}${path}`, {
     method: "POST",
-    headers: { accept: "text/event-stream" },
+    headers: sameOriginHeaders(api.url, { accept: "text/event-stream" }),
   });
   const type = res.headers.get("content-type") ?? "";
   if (!type.includes("text/event-stream")) {
@@ -409,7 +409,7 @@ describe("AI output rules (applied to every provider's output)", () => {
     const id = await createNote();
     const target = `/api/notes/${id}/summary`;
 
-    const first = await fetch(`${api.url}${target}`, { method: "POST", headers: { accept: "text/event-stream" } });
+    const first = await fetch(`${api.url}${target}`, { method: "POST", headers: sameOriginHeaders(api.url, { accept: "text/event-stream" }) });
     const reader = first.body?.getReader();
     if (!reader) throw new Error("expected a response body");
     const decoder = new TextDecoder();

@@ -58,3 +58,16 @@ it("rejects cross-site authenticated-browser mutations", async () => {
   expect((await call(server.url, "POST", `/api/notes/${id}/tags`, undefined, { origin: "https://other.example" })).status).toBe(403);
   expect((await call(server.url, "GET", `/api/notes/${id}`)).status).toBe(200);
 });
+
+it("rejects a regenerate that omits Origin, and does not call the model", async () => {
+  const ai = scriptedAi();
+  const server = await startServer(pool, ai.provider);
+  servers.push(server);
+  const id = await seed();
+  const res = await fetch(`${server.url}/api/notes/${id}/tags?regenerate=true`, { method: "POST" });
+  expect(res.status).toBe(403);
+  expect(await res.json()).toEqual({
+    error: { code: "cross_site_request", message: "Cross-site changes are not allowed." },
+  });
+  expect(ai.calls.tags).toBe(0);
+});
