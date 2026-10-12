@@ -8,6 +8,8 @@ let server: TestServer;
 // Creating a note tags it in the background. Fixed output keeps those tags predictable.
 const CREATED_TAGS = ["alpha", "beta", "gamma"];
 const api = (method: string, path: string, body?: unknown) => call(server.url, method, path, body);
+const createWithKey = (note: unknown, key: string) => call(server.url, "POST", "/api/notes", note, { "idempotency-key": key });
+const PLAN = { title: "Plan", content: "Ship v1." };
 const countNotes = async () => (await pool.query<{ n: number }>("SELECT count(*)::int AS n FROM notes")).rows[0]!.n;
 
 beforeAll(async () => {
@@ -40,15 +42,15 @@ describe("POST /api/notes", () => {
   });
 
   it("accepts a title and content at exactly the size limits", async () => {
-    const res = await api("POST", "/api/notes", { title: "t".repeat(200), content: "c".repeat(20_000) });
+    const res = await api("POST", "/api/notes", { title: "t".repeat(200), content: "c".repeat(50_000) });
 
     expect(res.status).toBe(201);
-    expect(res.body.note.content).toHaveLength(20_000);
+    expect(res.body.note.content).toHaveLength(50_000);
   });
 
   it("counts the caps in code points, so an emoji is one character", async () => {
-    const accepted = await api("POST", "/api/notes", { title: "😀".repeat(200), content: "😀".repeat(10_001) });
-    const rejected = await api("POST", "/api/notes", { title: "x", content: "😀".repeat(20_001) });
+    const accepted = await api("POST", "/api/notes", { title: "😀".repeat(200), content: "😀".repeat(25_001) });
+    const rejected = await api("POST", "/api/notes", { title: "x", content: "😀".repeat(50_001) });
 
     expect(accepted.status).toBe(201);
     expect(accepted.body.note.title).toBe("😀".repeat(200));
@@ -69,7 +71,7 @@ describe("POST /api/notes", () => {
     ["title over 200 chars", { title: "t".repeat(201), content: "x" }, "title"],
     ["missing content", { title: "x" }, "content"],
     ["whitespace-only content", { title: "x", content: " \n\t " }, "content"],
-    ["content over 20,000 chars", { title: "x", content: "c".repeat(20_001) }, "content"],
+    ["content over 50,000 chars", { title: "x", content: "c".repeat(50_001) }, "content"],
     ["non-string content", { title: "x", content: 42 }, "content"],
     ["a null byte in the title", { title: "bad\u0000title", content: "x" }, "title"],
     ["a null byte in the content", { title: "x", content: "bad\u0000note" }, "content"],
@@ -120,16 +122,10 @@ describe("POST /api/notes with an Idempotency-Key", () => {
 
   it("returns the stored note with 200 when the same key repeats, including padding the server strips", async () => {
     const key = randomUUID();
-    const first = await call(server.url, "POST", "/api/notes", { title: "Plan", content: "Ship v1." }, { "idempotency-key": key });
+    const first = await createWithKey(PLAN, key);
 
-    const repeat = await call(server.url, "POST", "/api/notes", { title: "Plan", content: "Ship v1." }, { "idempotency-key": key });
-    const padded = await call(
-      server.url,
-      "POST",
-      "/api/notes",
-      { title: "  Plan  ", content: " \u200bShip v1. " },
-      { "idempotency-key": key },
-    );
+    const repeat = await createWithKey(PLAN, key);
+    const padded = await createWithKey({ title: "  Plan  ", content: " \u200bShip v1. " }, key);
 
     expect(first.status).toBe(201);
     expect(repeat.status).toBe(200);
@@ -141,17 +137,20 @@ describe("POST /api/notes with an Idempotency-Key", () => {
 
   it("rejects the same key with a different note with 422 and keeps the first", async () => {
     const key = randomUUID();
-    const first = await call(server.url, "POST", "/api/notes", { title: "Plan", content: "Ship v1." }, { "idempotency-key": key });
+    const first = await createWithKey(PLAN, key);
 
-    const res = await call(server.url, "POST", "/api/notes", { title: "Plan", content: "Ship v2." }, { "idempotency-key": key });
+    const res = await createWithKey({ ...PLAN, content: "Ship v2." }, key);
 
     expect(res.status).toBe(422);
     expect(res.body.error.code).toBe("idempotency_key_reused");
+    expect(res.body.error.issues).toEqual([
+      { path: "content", message: "Content does not match the note stored for this Idempotency-Key." },
+    ]);
     expect((await api("GET", "/api/notes")).body.notes.map((n: { id: string }) => n.id)).toEqual([first.body.note.id]);
   });
 
   it("rejects a key that is not a UUID with 400 and stores nothing", async () => {
-    const res = await call(server.url, "POST", "/api/notes", { title: "Plan", content: "Ship v1." }, { "idempotency-key": "retry-1" });
+    const res = await createWithKey(PLAN, "retry-1");
 
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe("invalid_idempotency_key");

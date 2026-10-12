@@ -1,5 +1,4 @@
 import { z } from "zod";
-import type { AiTextStream } from "./stream.js";
 
 /**
  * Raw shapes the model is asked to produce. Business rules (summaryCharLimit,
@@ -19,11 +18,15 @@ export interface NoteText {
   content: string;
 }
 
+/** Receives each piece of the model's raw text as it arrives. */
+export type OnText = (delta: string) => void;
+
+/** Each call resolves with the parsed output, and passes its text to `onText` while it is written. */
 export interface AiProvider {
-  summarize(note: NoteText): AiTextStream<SummaryOutput>;
-  generateTags(note: NoteText): AiTextStream<TagsOutput>;
+  summarize(note: NoteText, onText?: OnText): Promise<SummaryOutput>;
+  generateTags(note: NoteText, onText?: OnText): Promise<TagsOutput>;
   /** Both results from one call, so the note's input tokens are paid for once. */
-  summarizeAndTag(note: NoteText): AiTextStream<SummaryAndTagsOutput>;
+  summarizeAndTag(note: NoteText, onText?: OnText): Promise<SummaryAndTagsOutput>;
 }
 
 export type AiErrorCode = "timeout" | "rate_limited" | "unavailable" | "refused" | "invalid_output";

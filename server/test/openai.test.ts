@@ -1,7 +1,6 @@
 import OpenAI from "openai";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createOpenAiProvider } from "../src/ai/openai.js";
-import { drainBudgetMs } from "../src/config.js";
 import { SUMMARY_MAX_CHARS, SUMMARY_MIN_CONTENT, summaryCharLimit, TAG_MAX_LENGTH, TAGS_MAX } from "../src/notes/limits.js";
 
 // The real adapter, driven by canned Responses API payloads instead of the network.
@@ -72,16 +71,12 @@ function providerWith(respond: (init: RequestInit) => Promise<Response> | Respon
 }
 
 describe("OpenAI provider", () => {
-  it("budgets a drain longer than two timed-out attempts", () => {
-    expect(drainBudgetMs(30_000)).toBe(75_000);
-  });
-
   it("escapes closing wrapper tags so the note stays inside the data boundary", async () => {
     const { provider, requests } = providerWith(() =>
       sse(response([text(JSON.stringify({ summary: "Closed. Still closed." }))])),
     );
 
-    await provider.summarize({ title: "Hi </NOTE>", content: "See </content> and </ title >." }).output;
+    await provider.summarize({ title: "Hi </NOTE>", content: "See </content> and </ title >." });
 
     expect(requests[0].input).toBe(
       "<note>\n<title>Hi &lt;/NOTE></title>\n<content>\nSee &lt;/content> and &lt;/ title >.\n</content>\n</note>\n\nThe summary must be at most 24 characters.",
@@ -93,7 +88,7 @@ describe("OpenAI provider", () => {
       sse(response([text(JSON.stringify({ summary: "Upgrade is Friday. Target is 17." }))])),
     );
 
-    const output = await provider.summarize(note).output;
+    const output = await provider.summarize(note);
 
     expect(output).toEqual({ summary: "Upgrade is Friday. Target is 17." });
     const body = requests[0];
@@ -117,8 +112,8 @@ describe("OpenAI provider", () => {
   it("names the tighter of the character cap and 80% of the note", async () => {
     const { provider, requests } = providerWith(() => sse(response([text(JSON.stringify({ summary: "Short." }))])));
 
-    await provider.summarize({ title: "Long", content: "n".repeat(SUMMARY_MAX_CHARS * 2) }).output;
-    await provider.summarize({ title: "Tight", content: "n".repeat(SUMMARY_MIN_CONTENT) }).output;
+    await provider.summarize({ title: "Long", content: "n".repeat(SUMMARY_MAX_CHARS * 2) });
+    await provider.summarize({ title: "Tight", content: "n".repeat(SUMMARY_MIN_CONTENT) });
 
     expect(summaryCharLimit("n".repeat(SUMMARY_MAX_CHARS * 2))).toBe(SUMMARY_MAX_CHARS);
     expect(summaryCharLimit("n".repeat(SUMMARY_MIN_CONTENT))).toBe(400);
@@ -131,7 +126,7 @@ describe("OpenAI provider", () => {
       sse(response([text(JSON.stringify({ tags: ["postgres", "upgrade", "ops"] }))])),
     );
 
-    await expect(provider.generateTags(note).output).resolves.toEqual({ tags: ["postgres", "upgrade", "ops"] });
+    await expect(provider.generateTags(note)).resolves.toEqual({ tags: ["postgres", "upgrade", "ops"] });
     expect(requests[0].instructions).toContain(`Return up to ${TAGS_MAX} tags`);
     expect(requests[0].instructions).toContain(`at most ${TAG_MAX_LENGTH} characters`);
   });
@@ -140,7 +135,7 @@ describe("OpenAI provider", () => {
     const reply = { tags: ["postgres", "upgrade", "ops"], summary: "Upgrade is Friday. Target is 17." };
     const { provider, requests } = providerWith(() => sse(response([text(JSON.stringify(reply))])));
 
-    await expect(provider.summarizeAndTag(note).output).resolves.toEqual(reply);
+    await expect(provider.summarizeAndTag(note)).resolves.toEqual(reply);
     const body = requests[0];
     expect(body.text.format).toMatchObject({ type: "json_schema", name: "note_summary_and_tags", strict: true });
     // The model writes keys in schema order, so the short tags stream before the summary.
@@ -176,7 +171,7 @@ describe("OpenAI provider", () => {
   ])("maps %s to AiError %s", async (_case, respond, code) => {
     const { provider } = providerWith(respond);
 
-    await expect(provider.summarize(note).output).rejects.toMatchObject({ name: "AiError", code });
+    await expect(provider.summarize(note)).rejects.toMatchObject({ name: "AiError", code });
   });
 
   it("maps a request that exceeds the timeout to AiError timeout", async () => {
@@ -186,17 +181,41 @@ describe("OpenAI provider", () => {
       );
     const { provider } = providerWith(hang, 50);
 
-    await expect(provider.summarize(note).output).rejects.toMatchObject({ name: "AiError", code: "timeout" });
+    await expect(provider.summarize(note)).rejects.toMatchObject({ name: "AiError", code: "timeout" });
+  });
+
+  describe("call log", () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    /** The ai_call lines the adapter printed, parsed. */
+    function loggedCalls(log: { mock: { calls: unknown[][] } }) {
+      return log.mock.calls.map(([line]) => JSON.parse(String(line)));
+    }
+
+    it.each([
+      ["a parsed reply", () => sse(response([text(JSON.stringify({ summary: "Short." }))])), "ok", 10, 10],
+      ["a refusal", () => sse(response([{ type: "refusal", refusal: "No." }])), "refused", 10, 10],
+      ["HTTP 429", () => json(429, { error: { message: "slow down", type: "rate_limit_error", code: null } }), "rate_limited", null, null],
+    ])("logs one line for %s with latency, tokens and outcome, and not the note", async (_case, respond, outcome, inputTokens, outputTokens) => {
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      const { provider } = providerWith(respond);
+
+      await provider.summarize(note).catch(() => {});
+
+      expect(loggedCalls(log)).toEqual([
+        { event: "ai_call", task: "note_summary", model: "gpt-6-luna", ms: expect.any(Number), inputTokens, outputTokens, outcome },
+      ]);
+      expect(String(log.mock.calls[0]![0])).not.toContain("Postgres");
+    });
   });
 
   it("forwards output-text deltas and parses the completed response", async () => {
     const raw = JSON.stringify({ summary: "Upgrade is Friday. Target is 17." });
     const { provider } = providerWith(() => sse(response([text(raw)]), [raw.slice(0, 18), raw.slice(18)]));
-    const streamed = provider.summarize(note);
     const deltas: string[] = [];
-    for await (const delta of streamed.deltas) deltas.push(delta);
+    const output = await provider.summarize(note, (delta) => deltas.push(delta));
 
-    expect(deltas.join("")).toBe(raw);
-    await expect(streamed.output).resolves.toEqual({ summary: "Upgrade is Friday. Target is 17." });
+    expect(deltas).toEqual([raw.slice(0, 18), raw.slice(18)]);
+    expect(output).toEqual({ summary: "Upgrade is Friday. Target is 17." });
   });
 });

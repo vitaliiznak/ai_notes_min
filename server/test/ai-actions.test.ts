@@ -51,6 +51,12 @@ async function createNote(note = LONG_NOTE): Promise<string> {
   return rows[0]!.id;
 }
 
+/** A server with this scripted AI, and one note stored directly. */
+async function setup(script?: Parameters<typeof scriptedAi>[0], note?: typeof LONG_NOTE) {
+  const ai = scriptedAi(script);
+  return { ai, api: await serve(ai), id: await createNote(note) };
+}
+
 beforeEach(async () => {
   await pool.query("TRUNCATE notes");
 });
@@ -79,9 +85,7 @@ describe.each([
   const path = (id: string) => `/api/notes/${id}/${field}`;
 
   it("generates the result, stores it and returns the updated note", async () => {
-    const ai = scriptedAi();
-    const api = await serve(ai);
-    const id = await createNote();
+    const { ai, api, id } = await setup();
 
     const res = await api("POST", path(id));
 
@@ -92,9 +96,7 @@ describe.each([
   });
 
   it("serves the stored result on later calls without calling the AI again", async () => {
-    const ai = scriptedAi();
-    const api = await serve(ai);
-    const id = await createNote();
+    const { ai, api, id } = await setup();
     await api("POST", path(id));
 
     const res = await api("POST", path(id));
@@ -104,9 +106,7 @@ describe.each([
   });
 
   it("replaces the stored result when ?regenerate=true", async () => {
-    const ai = scriptedAi();
-    const api = await serve(ai);
-    const id = await createNote();
+    const { ai, api, id } = await setup();
     await api("POST", path(id));
 
     const res = await api("POST", `${path(id)}?regenerate=true`);
@@ -138,9 +138,7 @@ describe.each([
   });
 
   it("makes exactly one AI call for 10 concurrent requests, and all of them get its result", async () => {
-    const ai = scriptedAi({ delayMs: 200 });
-    const api = await serve(ai);
-    const id = await createNote();
+    const { ai, api, id } = await setup({ delayMs: 200 });
 
     const results = await Promise.all(Array.from({ length: 10 }, () => api("POST", path(id))));
 
@@ -150,9 +148,7 @@ describe.each([
   });
 
   it("makes exactly one AI call for 5 concurrent regenerate requests", async () => {
-    const ai = scriptedAi({ delayMs: 200 });
-    const api = await serve(ai);
-    const id = await createNote();
+    const { ai, api, id } = await setup({ delayMs: 200 });
     await api("POST", path(id));
 
     const results = await Promise.all(Array.from({ length: 5 }, () => api("POST", `${path(id)}?regenerate=true`)));
@@ -212,8 +208,7 @@ describe.each([
     const fail = () => {
       throw new AiError(code, `simulated ${code}`);
     };
-    const api = await serve(scriptedAi({ summarize: fail, generateTags: fail }));
-    const id = await createNote();
+    const { api, id } = await setup({ summarize: fail, generateTags: fail });
 
     const res = await api("POST", path(id));
 
@@ -227,12 +222,10 @@ describe.each([
       if (n === 1) throw new AiError("unavailable", "simulated outage");
       return ok;
     };
-    const ai = scriptedAi({
+    const { ai, api, id } = await setup({
       summarize: failFirst({ summary: "Recovered. Second sentence." }),
       generateTags: failFirst({ tags: ["recovered", "alpha", "beta"] }),
     });
-    const api = await serve(ai);
-    const id = await createNote();
 
     expect((await api("POST", path(id))).status).toBe(502);
     const res = await api("POST", path(id));
@@ -242,9 +235,7 @@ describe.each([
   });
 
   it("streams previews and then the stored note when the client accepts event-stream", async () => {
-    const ai = scriptedAi();
-    const api = await serve(ai);
-    const id = await createNote();
+    const { ai, api, id } = await setup();
 
     const res = await postStream(api, path(id));
 
@@ -263,9 +254,7 @@ describe.each([
   });
 
   it("returns a cached result as a single done event and does not call the AI again", async () => {
-    const ai = scriptedAi();
-    const api = await serve(ai);
-    const id = await createNote();
+    const { ai, api, id } = await setup();
     await api("POST", path(id));
 
     const res = await postStream(api, path(id));
@@ -276,9 +265,7 @@ describe.each([
   });
 
   it("streams the replacement when ?regenerate=true", async () => {
-    const ai = scriptedAi();
-    const api = await serve(ai);
-    const id = await createNote();
+    const { ai, api, id } = await setup();
     await api("POST", path(id));
 
     const res = await postStream(api, `${path(id)}?regenerate=true`);
@@ -288,9 +275,7 @@ describe.each([
   });
 
   it("makes exactly one AI call for 10 concurrent streaming requests, and all of them get its result", async () => {
-    const ai = scriptedAi({ delayMs: 200 });
-    const api = await serve(ai);
-    const id = await createNote();
+    const { ai, api, id } = await setup({ delayMs: 200 });
 
     const results = await Promise.all(Array.from({ length: 10 }, () => postStream(api, path(id))));
 
@@ -303,8 +288,7 @@ describe.each([
     const fail = () => {
       throw new AiError("unavailable", "simulated outage");
     };
-    const api = await serve(scriptedAi({ summarize: fail, generateTags: fail }));
-    const id = await createNote();
+    const { api, id } = await setup({ summarize: fail, generateTags: fail });
 
     const res = await postStream(api, path(id));
 
@@ -314,12 +298,10 @@ describe.each([
   });
 
   it("sends an error event and stores nothing when streamed text fails validation", async () => {
-    const ai = scriptedAi({
+    const { ai, api, id } = await setup({
       summarize: () => ({ summary: "x".repeat(SUMMARY_MAX_CHARS + 1) }),
       generateTags: () => ({ tags: [] }),
-    });
-    const api = await serve(ai);
-    const id = await createNote({ title: "Long", content: "n".repeat(SUMMARY_MAX_CHARS * 2) });
+    }, { title: "Long", content: "n".repeat(SUMMARY_MAX_CHARS * 2) });
 
     const res = await postStream(api, path(id));
 
@@ -347,15 +329,13 @@ describe.each([
 
 describe("AI output rules (applied to every provider's output)", () => {
   async function summarizeWith(summary: string, content = LONG_NOTE.content) {
-    const api = await serve(scriptedAi({ summarize: () => ({ summary }) }));
-    const id = await createNote({ title: "Note", content });
+    const { api, id } = await setup({ summarize: () => ({ summary }) }, { title: "Note", content });
     const res = await api("POST", `/api/notes/${id}/summary`);
     return { res, stored: (await api("GET", `/api/notes/${id}`)).body.note.summary };
   }
 
   async function tagWith(tags: string[]) {
-    const api = await serve(scriptedAi({ generateTags: () => ({ tags }) }));
-    const id = await createNote();
+    const { api, id } = await setup({ generateTags: () => ({ tags }) });
     const res = await api("POST", `/api/notes/${id}/tags`);
     return { res, stored: (await api("GET", `/api/notes/${id}`)).body.note.tags };
   }
@@ -404,9 +384,7 @@ describe("AI output rules (applied to every provider's output)", () => {
   });
 
   it("sends summary text before storing it, and catches a second client up", async () => {
-    const ai = scriptedAi({ streamDelayMs: 80 });
-    const api = await serve(ai);
-    const id = await createNote();
+    const { ai, api, id } = await setup({ streamDelayMs: 80 });
     const target = `/api/notes/${id}/summary`;
 
     const first = await fetch(`${api.url}${target}`, { method: "POST", headers: sameOriginHeaders(api.url, { accept: "text/event-stream" }) });
@@ -444,38 +422,25 @@ describe("AI output rules (applied to every provider's output)", () => {
   });
 
   it("rejects a summary that is not at least 20% shorter than the note and stores nothing", async () => {
-    const content = "n".repeat(SUMMARY_MIN_CONTENT);
-    const api = await serve(scriptedAi({ summarize: () => ({ summary: "a".repeat(401) }) }));
-    const id = await createNote({ title: "Short", content });
-
-    const res = await api("POST", `/api/notes/${id}/summary`);
+    const { res, stored } = await summarizeWith("a".repeat(401), "n".repeat(SUMMARY_MIN_CONTENT));
 
     expect(res.status).toBe(502);
     expect(res.body.error.message).toBe("Expected a summary at least 20% shorter than the note.");
-    expect((await api("GET", `/api/notes/${id}`)).body.note.summary).toBeNull();
+    expect(stored).toBeNull();
   });
 
   it("stores a summary of exactly 80% of the note, counted in code points", async () => {
-    const content = "😀".repeat(SUMMARY_MIN_CONTENT);
-    const summary = "😀".repeat(400);
-    const api = await serve(scriptedAi({ summarize: () => ({ summary }) }));
-    const id = await createNote({ title: "Short", content });
-
-    const res = await api("POST", `/api/notes/${id}/summary`);
+    const { res, stored } = await summarizeWith("😀".repeat(400), "😀".repeat(SUMMARY_MIN_CONTENT));
 
     expect(res.status).toBe(200);
-    expect(res.body.note.summary).toBe(summary);
+    expect(stored).toBe("😀".repeat(400));
   });
 
   it("stores a summary of exactly the character cap, counted in code points, when the note is long enough", async () => {
-    const summary = "😀".repeat(SUMMARY_MAX_CHARS);
-    const api = await serve(scriptedAi({ summarize: () => ({ summary }) }));
-    const id = await createNote({ title: "Long", content: "n".repeat(SUMMARY_MAX_CHARS * 2) });
-
-    const res = await api("POST", `/api/notes/${id}/summary`);
+    const { res, stored } = await summarizeWith("😀".repeat(SUMMARY_MAX_CHARS), "n".repeat(SUMMARY_MAX_CHARS * 2));
 
     expect(res.status).toBe(200);
-    expect(res.body.note.summary).toBe(summary);
+    expect(stored).toBe("😀".repeat(SUMMARY_MAX_CHARS));
   });
 
   it("counts a tag's length in code points, so 40 emoji fit and 41 do not", async () => {
@@ -688,9 +653,7 @@ describe("summary of a short note", () => {
   };
 
   it.each(["", "?regenerate=true"])("is refused with 422 for POST /summary%s, with no AI call", async (query) => {
-    const ai = scriptedAi();
-    const api = await serve(ai);
-    const id = await createNote(short);
+    const { ai, api, id } = await setup(undefined, short);
 
     const res = await api("POST", `/api/notes/${id}/summary${query}`);
 
@@ -700,9 +663,7 @@ describe("summary of a short note", () => {
   });
 
   it("is refused as JSON 422 when the client accepts event-stream", async () => {
-    const ai = scriptedAi();
-    const api = await serve(ai);
-    const id = await createNote(short);
+    const { ai, api, id } = await setup(undefined, short);
 
     const res = await postStream(api, `/api/notes/${id}/summary`);
 
@@ -713,9 +674,7 @@ describe("summary of a short note", () => {
   });
 
   it("does not stop the note from being tagged", async () => {
-    const ai = scriptedAi();
-    const api = await serve(ai);
-    const id = await createNote(short);
+    const { ai, api, id } = await setup(undefined, short);
 
     const res = await api("POST", `/api/notes/${id}/tags`);
 

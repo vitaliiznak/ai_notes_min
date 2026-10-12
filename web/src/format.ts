@@ -1,30 +1,19 @@
+const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
+
+/** "full" is the date and time. "short" is "5m ago" for the past week, then the date (with the year if it isn't this one). */
 export function formatNoteTime(iso: string, style: "short" | "full"): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
-  if (style === "full") {
-    return date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  if (style === "full") return date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  const ago = Date.now() - date.getTime();
+  if (ago < 0 || ago >= 7 * DAY) {
+    const thisYear = date.getFullYear() === new Date().getFullYear();
+    return date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: thisYear ? undefined : "numeric" });
   }
-  return formatShort(date);
-}
-
-function formatShort(date: Date): string {
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  if (diffMs < 0) return shortDate(date, now);
-  const minute = 60_000;
-  const hour = 60 * minute;
-  const day = 24 * hour;
-  if (diffMs < minute) return "Just now";
-  if (diffMs < hour) return `${Math.floor(diffMs / minute)}m ago`;
-  if (diffMs < day) return `${Math.floor(diffMs / hour)}h ago`;
-  if (diffMs < 7 * day) return `${Math.floor(diffMs / day)}d ago`;
-  return shortDate(date, now);
-}
-
-function shortDate(date: Date, now: Date): string {
-  return date.toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-    year: date.getFullYear() === now.getFullYear() ? undefined : "numeric",
-  });
+  if (ago < MINUTE) return "Just now";
+  if (ago < HOUR) return `${Math.floor(ago / MINUTE)}m ago`;
+  if (ago < DAY) return `${Math.floor(ago / HOUR)}h ago`;
+  return `${Math.floor(ago / DAY)}d ago`;
 }

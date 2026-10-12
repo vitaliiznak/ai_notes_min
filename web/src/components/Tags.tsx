@@ -17,11 +17,7 @@ export function Tags({ tags, active, onSelect }: Props) {
               className="tag-button"
               aria-pressed={tag === active}
               title={`Show notes tagged ${tag}`}
-              onClick={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                onSelect(tag);
-              }}
+              onClick={() => onSelect(tag)}
             >
               {tag}
             </button>

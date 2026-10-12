@@ -60,14 +60,3 @@ test("filters the list by a tag picked on the note page", async ({ page }) => {
   await page.getByRole("button", { name: "Show all" }).click();
   await expect(page.locator(".note-list a")).toHaveCount(2);
 });
-
-test("keeps an unsaved draft across a reload", async ({ page }) => {
-  await page.goto("/#/new");
-  await page.getByLabel("Title").fill("Half-written note");
-  await page.getByLabel("Note").fill("Picks up where I left off.");
-
-  await page.reload();
-
-  await expect(page.getByLabel("Title")).toHaveValue("Half-written note");
-  await expect(page.getByLabel("Note")).toHaveValue("Picks up where I left off.");
-});

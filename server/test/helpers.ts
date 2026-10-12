@@ -1,8 +1,7 @@
 import type { AddressInfo } from "node:net";
 import { setTimeout as sleep } from "node:timers/promises";
 import pg from "pg";
-import type { AiProvider, SummaryAndTagsOutput, SummaryOutput, TagsOutput } from "../src/ai/provider.js";
-import { modelStream } from "../src/ai/stream.js";
+import type { AiProvider, OnText, SummaryAndTagsOutput, SummaryOutput, TagsOutput } from "../src/ai/provider.js";
 import { createApp } from "../src/app.js";
 import { canSummarize } from "../src/notes/limits.js";
 
@@ -100,42 +99,31 @@ export function scriptedAi(
   } = {},
 ) {
   const calls = { summary: 0, tags: 0, summaryAndTags: 0 };
-  async function take<T>(key: keyof typeof calls, produce: ((n: number) => T) | undefined, fallback: (n: number) => T) {
+  // Counts the call, then streams its output as JSON in small chunks, like a model would.
+  const respond = async <T>(
+    key: keyof typeof calls,
+    produce: ((n: number) => T) | undefined,
+    fallback: (n: number) => T,
+    onText: OnText = () => {},
+  ): Promise<T> => {
     const n = ++calls[key];
     await sleep(script.delayMs ?? 0);
-    return (produce ?? fallback)(n);
-  }
-  async function emitJson(emit: (delta: string) => void, value: unknown) {
+    const value = (produce ?? fallback)(n);
     const json = JSON.stringify(value);
-    const size = 12;
-    for (let i = 0; i < json.length; i += size) {
+    for (let i = 0; i < json.length; i += 12) {
       if (script.streamDelayMs) await sleep(script.streamDelayMs);
-      emit(json.slice(i, i + size));
+      onText(json.slice(i, i + 12));
     }
-  }
+    return value;
+  };
+  const summary = (n: number) => ({ summary: `Summary ${n}. Second sentence.` });
+  const tags = (n: number) => ({ tags: [`tag-${n}`, "alpha", "beta"] });
   const provider: AiProvider = {
-    summarize: () =>
-      modelStream(async (emit) => {
-        const value = await take("summary", script.summarize, (i) => ({ summary: `Summary ${i}. Second sentence.` }));
-        await emitJson(emit, value);
-        return value;
-      }),
-    generateTags: () =>
-      modelStream(async (emit) => {
-        const value = await take("tags", script.generateTags, (i) => ({ tags: [`tag-${i}`, "alpha", "beta"] }));
-        await emitJson(emit, value);
-        return value;
-      }),
+    summarize: (_note, onText) => respond("summary", script.summarize, summary, onText),
+    generateTags: (_note, onText) => respond("tags", script.generateTags, tags, onText),
     // Same defaults as the two calls above, so a test reads the same values whichever call produced them.
-    summarizeAndTag: () =>
-      modelStream(async (emit) => {
-        const value = await take("summaryAndTags", script.summarizeAndTag, (i) => ({
-          tags: [`tag-${i}`, "alpha", "beta"],
-          summary: `Summary ${i}. Second sentence.`,
-        }));
-        await emitJson(emit, value);
-        return value;
-      }),
+    summarizeAndTag: (_note, onText) =>
+      respond("summaryAndTags", script.summarizeAndTag, (n) => ({ ...tags(n), ...summary(n) }), onText),
   };
   return { provider, calls };
 }

@@ -26,7 +26,7 @@
 }
 
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); }
+body { margin: 0; }
 h1, h2, h3 { margin: 0; line-height: 1.25; text-wrap: balance; }
 h1 { font-size: 1.05rem; letter-spacing: -0.02em; }
 h3 {
@@ -135,40 +135,6 @@ button[aria-busy="true"] { cursor: progress; }
 }
 .text-button:hover:not(:disabled) { color: var(--ink); text-decoration: underline; }
 .button-new { width: 100%; }
-.api-link {
-  display: inline-block;
-  margin-top: 10px;
-  color: var(--muted);
-  font-size: 0.82rem;
-  font-weight: 600;
-  text-decoration: none;
-}
-.api-link:hover { color: var(--ink); text-decoration: underline; }
-.api-page {
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
-  height: 100dvh;
-  background: var(--paper);
-}
-.api-page-bar {
-  display: flex;
-  align-items: center;
-  flex: none;
-  min-height: 44px;
-  padding: 8px 16px;
-  background: var(--sidebar);
-  border-bottom: 1px solid var(--line-strong);
-}
-.api-page-bar a {
-  color: var(--ink);
-  font-weight: 600;
-  text-decoration: none;
-}
-.api-page-bar a:hover { text-decoration: underline; }
-.api-page-frame { flex: 1; min-height: 0; }
-.api-page-frame > div { height: 100%; }
-.api-page-loading { margin: 24px 16px; color: var(--muted); }
 .button-new[aria-current="page"] {
   background: var(--accent-strong);
   box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.72);
@@ -192,25 +158,19 @@ button[aria-busy="true"] { cursor: progress; }
   font-size: 0.8rem;
   font-weight: 600;
   color: var(--muted);
-  font-family: var(--sans);
-  letter-spacing: 0;
-  text-transform: none;
 }
 .list-label h2 { font: inherit; color: inherit; }
 .note-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
-.note-list a {
-  position: relative;
-  display: block;
-  padding: 10px 12px 10px 14px;
-  border-radius: 12px;
-  color: inherit;
-  text-decoration: none;
-}
-.note-list a:hover { background: rgba(255, 252, 248, 0.72); }
-.note-list a[aria-current="page"] {
+.note-list li { position: relative; padding: 10px 12px 10px 14px; border-radius: 12px; }
+.note-list li:hover { background: rgba(255, 252, 248, 0.72); }
+.note-list li:has(> a[aria-current="page"]) {
   background: var(--paper);
   box-shadow: 0 1px 2px rgba(60, 40, 20, 0.05), 0 8px 18px rgba(60, 40, 20, 0.05);
 }
+.note-list a { display: block; color: inherit; text-decoration: none; }
+/* The whole row opens the note. The tag buttons sit above this, so they stay clickable. */
+.note-list a::after { content: ""; position: absolute; inset: 0; border-radius: inherit; }
+.note-list .tags { position: relative; z-index: 1; }
 .note-list a[aria-current="page"]::before {
   content: "";
   position: absolute;
@@ -239,17 +199,6 @@ button[aria-busy="true"] { cursor: progress; }
 }
 .note-list time { font-size: 0.78rem; color: var(--muted); font-variant-numeric: tabular-nums; }
 .sidebar-empty { margin: 4px 8px; color: var(--muted); font-size: 0.9rem; }
-.sidebar-empty a { color: var(--accent); font-weight: 600; }
-.skeleton { display: grid; gap: 8px; }
-.skeleton span {
-  display: block;
-  height: 64px;
-  border-radius: 12px;
-  background: rgba(255, 252, 248, 0.55);
-}
-.skeleton span:nth-child(2) { width: 92%; }
-.skeleton span:nth-child(3) { width: 84%; }
-.skeleton span:nth-child(4) { width: 70%; }
 
 .tags { list-style: none; display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; }
 .tags li, .filter-tag {
@@ -295,17 +244,6 @@ button[aria-busy="true"] { cursor: progress; }
 .note-meta { color: var(--muted); font-size: 0.88rem; }
 /* AI output: tags are a light row under the date; only a summary gets a tinted card. */
 .note-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin-top: 4px; min-height: 26px; }
-.tag-skeleton { display: flex; gap: 6px; }
-.tag-skeleton span {
-  display: block;
-  width: 64px;
-  height: 22px;
-  border-radius: 999px;
-  background: var(--line);
-  animation: pulse 1.4s ease-in-out infinite;
-}
-.tag-skeleton span:nth-child(2) { width: 52px; }
-.tag-skeleton span:nth-child(3) { width: 80px; }
 .icon-button {
   width: 26px;
   height: 26px;
@@ -316,23 +254,12 @@ button[aria-busy="true"] { cursor: progress; }
   color: var(--muted);
 }
 .icon-button:hover:not(:disabled) { color: var(--ink); background: rgba(28, 25, 23, 0.06); }
-.tags-error { flex-basis: 100%; color: var(--danger); font-size: 0.85rem; }
-.tags-error .text-button { color: inherit; text-decoration: underline; }
+.note-tags .error-banner { flex-basis: 100%; }
 .ai { background: var(--paper-2); border-radius: 14px; padding: 14px 18px 16px; }
 .ai-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 24px; }
 .ai h3 { display: inline-flex; align-items: center; gap: 6px; }
 .sparkle { flex: none; color: var(--accent); }
 .ai-status { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 0.82rem; }
-.ai-skeleton { display: grid; gap: 8px; margin-top: 12px; }
-.ai-skeleton span {
-  display: block;
-  height: 12px;
-  border-radius: 6px;
-  background: var(--line);
-  animation: pulse 1.4s ease-in-out infinite;
-}
-.ai-skeleton span:nth-child(2) { width: 92%; }
-.ai-skeleton span:nth-child(3) { width: 58%; }
 .summary-text {
   margin-top: 6px;
   font-family: var(--serif);
@@ -359,22 +286,36 @@ button[aria-busy="true"] { cursor: progress; }
   line-height: 1.7;
   text-wrap: pretty;
 }
-.note-skeleton { display: grid; gap: 12px; }
-.note-skeleton span {
-  display: block;
-  height: 16px;
-  border-radius: 8px;
-  background: #efe8de;
-}
-.note-skeleton span:first-child { height: 36px; width: 68%; }
-.note-skeleton span:nth-child(2) { width: 32%; height: 12px; }
-.note-skeleton span:nth-child(3) { height: 148px; margin-top: 12px; }
 .note-status {
   display: grid;
   gap: 14px;
   justify-items: start;
   padding: 22px;
 }
+/* Placeholder bars. Each variant class sizes its own bars. */
+.skeleton { display: grid; gap: 8px; }
+.skeleton span {
+  display: block;
+  height: 12px;
+  border-radius: 8px;
+  background: var(--line);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+.skeleton span:nth-child(2) { width: 92%; }
+.list-skeleton span { height: 64px; border-radius: 12px; }
+.list-skeleton span:nth-child(3) { width: 84%; }
+.list-skeleton span:nth-child(4) { width: 70%; }
+.tag-skeleton { display: flex; gap: 6px; }
+.tag-skeleton span { width: 64px; height: 22px; border-radius: 999px; }
+.tag-skeleton span:nth-child(2) { width: 52px; }
+.tag-skeleton span:nth-child(3) { width: 80px; }
+.ai-skeleton { margin-top: 12px; }
+.ai-skeleton span:nth-child(3) { width: 58%; }
+.note-skeleton { gap: 12px; }
+.note-skeleton span { height: 16px; }
+.note-skeleton span:first-child { height: 36px; width: 68%; }
+.note-skeleton span:nth-child(2) { width: 32%; height: 12px; }
+.note-skeleton span:nth-child(3) { height: 148px; margin-top: 12px; }
 
 .composer-sheet { display: grid; gap: 12px; padding: 28px 32px 20px; }
 .composer input, .composer textarea {
@@ -401,7 +342,6 @@ button[aria-busy="true"] { cursor: progress; }
 .composer input:disabled, .composer textarea:disabled { opacity: 0.72; }
 .composer a.button[aria-disabled="true"] { opacity: 0.55; pointer-events: none; }
 .composer input::placeholder, .composer textarea::placeholder { color: #a3988d; }
-.counter { color: var(--accent); font-size: 0.78rem; font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
 /* Test fixture, kept off the note paper so it doesn't read as part of the product. */
 .samples {
   margin: 0 0 16px;
@@ -467,11 +407,10 @@ button[aria-busy="true"] { cursor: progress; }
 .ai-plan .sparkle { margin-top: 2px; }
 .ai-plan.is-summarized { background: var(--accent-soft); color: var(--tag-ink); }
 .ai-plan-count { font-variant-numeric: tabular-nums; }
-.composer-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
-.composer-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }
+.composer-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 
 .empty-state { margin: auto; color: var(--muted); font-size: 1.05rem; text-align: center; }
-.empty-state a { color: var(--accent); font-weight: 600; }
+.empty-state a, .sidebar-empty a { color: var(--accent); font-weight: 600; }
 .back-link {
   display: none;
   align-items: center;
@@ -492,16 +431,13 @@ button[aria-busy="true"] { cursor: progress; }
   align-items: center;
   justify-content: space-between;
   gap: 8px 12px;
-  margin: 0;
   padding: 10px 12px;
   border-radius: 12px;
   background: var(--danger-bg);
   color: var(--danger);
-  font-family: var(--sans);
   font-size: 0.9rem;
   line-height: 1.45;
 }
-.error-banner p { margin: 0; color: inherit; font: inherit; }
 .error-banner .button-ghost {
   color: inherit;
   border-color: currentColor;
@@ -542,20 +478,17 @@ button[aria-busy="true"] { cursor: progress; }
   .sidebar-header { padding-top: max(16px, env(safe-area-inset-top)); }
   .back-link { display: inline-flex; }
   .note, .composer-sheet { padding: 20px 16px 24px; border-radius: 16px; }
-  .composer-actions { width: 100%; }
   .composer-actions .button, .composer-actions button { flex: 1; }
   .note h2 { font-size: 1.7rem; }
   .composer .title-input { font-size: 1.35rem; }
 }
 
 /* Destructive actions stay separate from writing and AI controls. */
-.sidebar-footer { padding: 16px 24px; border-top: 1px solid #e5e7eb; }
+.sidebar-footer { padding: 16px 24px; border-top: 1px solid var(--line); }
 .delete-notes { margin-top: 16px; }
-.danger { color: #a32929; }
-.delete-confirmation { padding: 12px; border: 1px solid #e5bcbc; border-radius: 8px; background: #fff8f8; font-size: 14px; }
-.delete-confirmation p { margin: 0 0 12px; }
+.danger { color: var(--danger); }
+.delete-confirmation { display: grid; gap: 12px; padding: 12px; border-radius: 12px; background: var(--danger-bg); font-size: 0.9rem; }
 .delete-confirmation label { display: grid; gap: 6px; }
-.delete-confirmation input { width: 100%; box-sizing: border-box; }
-.delete-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-.delete-actions .danger { background: #a32929; color: #fff; }
-.delete-confirmation input { padding: 8px 10px; border: 1px solid #c8b9b2; border-radius: 6px; font: inherit; }
+.delete-confirmation input { padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 8px; font: inherit; }
+.delete-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.delete-actions .danger { background: var(--danger); color: #fff; }

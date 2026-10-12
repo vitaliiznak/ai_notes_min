@@ -1,7 +1,28 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { clearNotes, longNote, noteTags, saveNote, SHORT_NOTE } from "./helpers";
 
 const LONG_NOTE = { title: "Postgres 17 upgrade", content: longNote("postgres") };
+
+/** Resolves when a regenerate of this field has been answered with its stored result. */
+const regenerated = (page: Page, field: "summary" | "tags") =>
+  page.waitForResponse(
+    (response) =>
+      response.url().endsWith(`/${field}?regenerate=true`) && response.request().method() === "POST" && response.status() === 200,
+  );
+
+/** Fails the next regenerate of this field the way an AI outage does, then lets requests through. */
+async function failNextRegenerate(page: Page, field: "summary" | "tags") {
+  let failed = false;
+  await page.route(`**/api/notes/*/${field}?regenerate=true`, async (route) => {
+    if (failed) return route.continue();
+    failed = true;
+    await route.fulfill({
+      status: 502,
+      contentType: "application/json",
+      body: JSON.stringify({ error: { code: "ai_unavailable", message: "The AI provider failed (500)." } }),
+    });
+  });
+}
 
 test.beforeEach(async ({ request }) => {
   await clearNotes(request);
@@ -12,9 +33,7 @@ test("streams the summary text before it is stored", async ({ page }) => {
   await expect(noteTags(page)).toHaveCount(5);
 
   // Regenerating starts a fresh call, so the streaming state is on screen from the click.
-  const stored = page.waitForResponse(
-    (response) => response.url().endsWith("/summary?regenerate=true") && response.status() === 200,
-  );
+  const stored = regenerated(page, "summary");
   await page.getByRole("button", { name: "Regenerate summary" }).click();
 
   await expect(page.getByText("Summarizing…")).toBeVisible();
@@ -30,9 +49,7 @@ test("regenerates the tags without touching the summary", async ({ page }) => {
   await expect(noteTags(page)).toHaveCount(5);
   const summary = await page.locator(".summary-text").innerText();
 
-  const stored = page.waitForResponse(
-    (response) => response.url().endsWith("/tags?regenerate=true") && response.status() === 200,
-  );
+  const stored = regenerated(page, "tags");
   await page.getByRole("button", { name: "Regenerate tags" }).click();
   await expect(page.getByText("Tagging…")).toBeVisible();
   await stored;
@@ -41,54 +58,33 @@ test("regenerates the tags without touching the summary", async ({ page }) => {
   await expect(page.locator(".summary-text")).toHaveText(summary);
 });
 
-const unavailable = {
-  status: 502,
-  contentType: "application/json",
-  body: JSON.stringify({ error: { code: "ai_unavailable", message: "The AI provider failed (500)." } }),
-};
-
 test("shows what to do when regenerating tags fails, and Try again calls the model again", async ({ page }) => {
   await saveNote(page, SHORT_NOTE);
   await expect(noteTags(page)).toHaveCount(4);
 
-  let failed = false;
-  await page.route(/\/api\/notes\/[^/]+\/tags\?regenerate=true/, async (route) => {
-    if (failed) return route.continue();
-    failed = true;
-    await route.fulfill(unavailable);
-  });
+  await failNextRegenerate(page, "tags");
 
   await page.getByRole("button", { name: "Regenerate tags" }).click();
-  await expect(page.locator(".tags-error")).toContainText("The AI service isn't responding. Try again in a moment.");
+  await expect(page.locator(".note-tags .error-banner")).toContainText("The AI service isn't responding. Try again in a moment.");
 
-  const retried = page.waitForResponse(
-    (response) => response.url().includes("/tags?regenerate=true") && response.request().method() === "POST" && response.status() === 200,
-  );
-  await page.locator(".tags-error").getByRole("button", { name: "Try again" }).click();
+  const retried = regenerated(page, "tags");
+  await page.locator(".note-tags .error-banner").getByRole("button", { name: "Try again" }).click();
   await retried;
 
   await expect(noteTags(page)).toHaveCount(4);
-  await expect(page.locator(".tags-error")).toHaveCount(0);
+  await expect(page.locator(".note-tags .error-banner")).toHaveCount(0);
 });
 
 test("offers Try again after a summary regenerate fails, and that retry calls the model again", async ({ page }) => {
   await saveNote(page, LONG_NOTE);
   await expect(page.locator(".summary-text")).toContainText('[fake AI] Summary of "Postgres 17 upgrade".');
 
-  let failed = false;
-  await page.route(/\/api\/notes\/[^/]+\/summary\?regenerate=true/, async (route) => {
-    if (failed) return route.continue();
-    failed = true;
-    await route.fulfill(unavailable);
-  });
+  await failNextRegenerate(page, "summary");
 
   await page.getByRole("button", { name: "Regenerate summary" }).click();
   await expect(page.locator(".ai .error-banner")).toContainText("The AI service isn't responding. Try again in a moment.");
 
-  const retried = page.waitForResponse(
-    (response) =>
-      response.url().includes("/summary?regenerate=true") && response.request().method() === "POST" && response.status() === 200,
-  );
+  const retried = regenerated(page, "summary");
   await page.locator(".ai .error-banner").getByRole("button", { name: "Try again" }).click();
   await retried;
 

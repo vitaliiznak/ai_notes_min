@@ -1,20 +1,17 @@
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import type pg from "pg";
-import type { Note, NoteListItem } from "./limits.js";
+import type { Note, NoteListItem } from "./types.js";
 import type { CreateNoteInput } from "./schema.js";
 import { notes } from "./table.js";
 
-function listed(row: { id: string; title: string; tags: string[] | null; createdAt: Date }): NoteListItem {
-  return {
-    id: row.id,
-    title: row.title,
-    tags: row.tags,
-    createdAt: row.createdAt.toISOString(),
-  };
+type Row = typeof notes.$inferSelect;
+
+function listed(row: Pick<Row, "id" | "title" | "tags" | "createdAt">): NoteListItem {
+  return { id: row.id, title: row.title, tags: row.tags, createdAt: row.createdAt.toISOString() };
 }
 
-function toNote(row: typeof notes.$inferSelect): Note {
+function toNote(row: Row): Note {
   return { ...listed(row), content: row.content, summary: row.summary };
 }
 
@@ -70,10 +67,8 @@ export function createNotesRepo(pool: pg.Pool) {
         .onConflictDoNothing({ target: notes.idempotencyKey })
         .returning();
       if (row) return { note: toNote(row), created: true };
-      // Only a key can conflict, so one is set here.
-      const [existing] = idempotencyKey
-        ? await db.select().from(notes).where(eq(notes.idempotencyKey, idempotencyKey))
-        : [];
+      // Only the idempotency key can conflict, so it is set here.
+      const [existing] = await db.select().from(notes).where(eq(notes.idempotencyKey, idempotencyKey!));
       if (!existing) throw new Error("Insert returned no row.");
       return { note: toNote(existing), created: false };
     },

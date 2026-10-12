@@ -1,7 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { TAGS_MAX } from "../notes/limits.js";
-import type { AiProvider, NoteText, SummaryOutput, TagsOutput } from "./provider.js";
-import { modelStream, type AiTextStream } from "./stream.js";
+import type { AiProvider, NoteText, OnText, SummaryOutput, TagsOutput } from "./provider.js";
 
 const FALLBACK_TAG = "fake-ai";
 const CHUNK = 8;
@@ -17,21 +16,19 @@ const STOPWORDS = new Set(
  * Text is emitted in small pieces so the UI can show it arriving.
  */
 export function createFakeProvider(): AiProvider {
-  function streamed<T>(value: T): AiTextStream<T> {
-    return modelStream(async (emit) => {
-      const json = JSON.stringify(value);
-      for (let i = 0; i < json.length; i += CHUNK) {
-        emit(json.slice(i, i + CHUNK));
-        await sleep(CHUNK_DELAY_MS);
-      }
-      return value;
-    });
+  async function streamed<T>(value: T, onText: OnText = () => {}): Promise<T> {
+    const json = JSON.stringify(value);
+    for (let i = 0; i < json.length; i += CHUNK) {
+      onText(json.slice(i, i + CHUNK));
+      await sleep(CHUNK_DELAY_MS);
+    }
+    return value;
   }
 
   return {
-    summarize: (note) => streamed(fakeSummary(note)),
-    generateTags: (note) => streamed(fakeTags(note)),
-    summarizeAndTag: (note) => streamed({ ...fakeTags(note), ...fakeSummary(note) }),
+    summarize: (note, onText) => streamed(fakeSummary(note), onText),
+    generateTags: (note, onText) => streamed(fakeTags(note), onText),
+    summarizeAndTag: (note, onText) => streamed({ ...fakeTags(note), ...fakeSummary(note) }, onText),
   };
 }
 

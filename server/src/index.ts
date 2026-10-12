@@ -20,7 +20,8 @@ await migrateSchema(pool);
 
 const { app, idle } = createApp({ pool, ai, staticDir: config.STATIC_DIR });
 const server = app.listen(config.PORT, () => {
-  console.log(`API listening on :${config.PORT} (AI provider: ${config.AI_PROVIDER}${config.AI_PROVIDER === "openai" ? `, model: ${config.OPENAI_MODEL}` : ""})`);
+  const model = config.AI_PROVIDER === "openai" ? `, model: ${config.OPENAI_MODEL}` : "";
+  console.log(`API listening on :${config.PORT} (AI provider: ${config.AI_PROVIDER}${model})`);
 });
 
 let draining = false;

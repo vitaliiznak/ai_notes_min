@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { api, ApiError, clampText, noteLength, normalizeUserText, saveAttemptKey, storedNoteText } from "./api";
+import { api, ApiError, charLength, normalizeUserText } from "./api";
 
 const NOTE = {
   id: "11111111-1111-4111-8111-111111111111",
@@ -42,17 +42,12 @@ describe("api.generate over a stream", () => {
     `event: preview\ndata: {"tags":["café","ötto"]}\n\n` +
     `event: done\ndata: ${JSON.stringify({ note: NOTE })}\n\n`;
 
-  it("reads every preview and the stored note from a body split at arbitrary byte boundaries", async () => {
+  it.each([
     // 7 bytes at a time: no slice lines up with an event boundary, and the é and ö each split in two.
-    stubFetch(sseResponse(body, 7));
-    const previews: unknown[] = [];
-    const note = await api.generate(NOTE.id, "tags", false, (preview) => previews.push(preview));
-    expect(previews).toEqual([{ tags: ["café"] }, { tags: ["café", "ötto"] }]);
-    expect(note).toEqual(NOTE);
-  });
-
-  it("reads the same events from a body that arrives in one piece with CRLF line endings", async () => {
-    stubFetch(sseResponse(body.replace(/\n/g, "\r\n"), body.length * 2));
+    ["split at arbitrary byte boundaries", body, 7],
+    ["in one piece with CRLF line endings", body.replace(/\n/g, "\r\n"), body.length * 2],
+  ])("reads every preview and the stored note from a body %s", async (_, text, sliceBytes) => {
+    stubFetch(sseResponse(text, sliceBytes));
     const previews: unknown[] = [];
     const note = await api.generate(NOTE.id, "tags", false, (preview) => previews.push(preview));
     expect(previews).toEqual([{ tags: ["café"] }, { tags: ["café", "ötto"] }]);
@@ -120,32 +115,11 @@ describe("api.createNote", () => {
     expect(init.headers).toMatchObject({ "content-type": "application/json", "idempotency-key": NOTE.id });
     expect(note).toEqual(NOTE);
   });
-
-  it("reuses the key for a retry of the same stored text, and mints a new one when the text changes", () => {
-    const first = saveAttemptKey(null, "  Hello \u200b", "Body", () => "key-1");
-    const retry = saveAttemptKey(first, "Hello", "Body", () => "key-2");
-    const edited = saveAttemptKey(retry, "Hello", "Body changed", () => "key-3");
-
-    expect(first).toEqual({ text: storedNoteText("Hello", "Body"), key: "key-1" });
-    expect(retry).toEqual({ text: first.text, key: "key-1" });
-    expect(edited.key).toBe("key-3");
-    expect(edited.text).not.toBe(first.text);
-  });
 });
 
 describe("limits shared with the server", () => {
   it("counts length in code points, so an emoji is one character", () => {
-    expect(noteLength("\u{1f600}\u{1f600}")).toBe(2);
-  });
-
-  it("clamps the stored text to whole code points, and keeps padding while that text still fits", () => {
-    expect(clampText("\u{1f600}\u{1f600}\u{1f600}", 2)).toBe("\u{1f600}\u{1f600}");
-    expect(clampText(`${" ".repeat(50)}Hello`, 200)).toBe(`${" ".repeat(50)}Hello`);
-    expect(clampText(`${" ".repeat(50)}${"a".repeat(250)}`, 200)).toBe("a".repeat(200));
-  });
-
-  it("binds a retry to the text the server stores", () => {
-    expect(storedNoteText("  Hello \u200b", "Body")).toBe(storedNoteText("Hello", "Body"));
+    expect(charLength("\u{1f600}\u{1f600}")).toBe(2);
   });
 
   it("strips the edge padding the server strips, and keeps inner whitespace", () => {

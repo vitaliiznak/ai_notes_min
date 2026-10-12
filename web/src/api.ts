@@ -1,47 +1,8 @@
-import {
-  charLength,
-  normalizeUserText,
-  type AiField,
-  type AiPreview,
-  type Note,
-  type NoteListItem,
-} from "../../server/src/notes/limits";
+import { EventSourceParserStream } from "eventsource-parser/stream";
+import type { AiField, AiPreview, Note, NoteListItem } from "../../server/src/notes/types";
 
-export {
-  canSummarize,
-  charLength as noteLength,
-  CONTENT_MAX,
-  normalizeUserText,
-  SUMMARY_MIN_CONTENT,
-  TITLE_MAX,
-  type AiField,
-  type AiPreview,
-  type Note,
-  type NoteListItem,
-} from "../../server/src/notes/limits";
-
-export function clampText(value: string, max: number): string {
-  const stored = normalizeUserText(value);
-  if (charLength(stored) <= max) return value;
-  return [...stored].slice(0, max).join("");
-}
-
-/** Identity of a create: the title and content the server will store. */
-export function storedNoteText(title: string, content: string): string {
-  return JSON.stringify([normalizeUserText(title), normalizeUserText(content)]);
-}
-
-/** The key for this save. A retry of the same stored text keeps the key it already sent. */
-export function saveAttemptKey(
-  previous: { text: string; key: string } | null,
-  title: string,
-  content: string,
-  mint: () => string,
-): { text: string; key: string } {
-  const text = storedNoteText(title, content);
-  if (previous?.text === text) return { text, key: previous.key };
-  return { text, key: mint() };
-}
+export { canSummarize, charLength, normalizeUserText, SUMMARY_MIN_CONTENT } from "../../server/src/notes/limits";
+export type { AiField, AiPreview, Note, NoteListItem } from "../../server/src/notes/types";
 
 export class ApiError extends Error {
   constructor(
@@ -73,11 +34,10 @@ function throwApi(status: number, body: unknown): never {
   throw new ApiError(status, code, AI_ERROR_MESSAGES[code] ?? (detail || error?.message || `Request failed (${status}).`));
 }
 
-async function send(path: string, init: RequestInit): Promise<Response> {
+async function send(path: string, init: RequestInit = {}): Promise<Response> {
   try {
     return await fetch(`/api${path}`, init);
-  } catch (err) {
-    if (err instanceof DOMException && err.name === "AbortError") throw err;
+  } catch {
     throw new ApiError(0, "network_error", "Can't reach the server. Check your connection and try again.");
   }
 }
@@ -88,29 +48,7 @@ async function readJson<T>(res: Response): Promise<T> {
   return body as T;
 }
 
-async function request<T>(path: string, init: { method?: string; body?: string; headers?: Record<string, string> } = {}): Promise<T> {
-  const headers = init.body ? { "content-type": "application/json", ...init.headers } : init.headers;
-  return readJson<T>(await send(path, { ...init, headers }));
-}
-
-function parseSse(chunk: string, onEvent: (event: string, data: unknown) => void): string {
-  const normalised = chunk.replace(/\r\n/g, "\n");
-  let rest = normalised;
-  let split = rest.indexOf("\n\n");
-  while (split !== -1) {
-    const block = rest.slice(0, split);
-    rest = rest.slice(split + 2);
-    let event = "message";
-    const data: string[] = [];
-    for (const line of block.split("\n")) {
-      if (line.startsWith("event:")) event = line.slice(6).trim();
-      else if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
-    }
-    if (data.length > 0) onEvent(event, JSON.parse(data.join("\n")));
-    split = rest.indexOf("\n\n");
-  }
-  return rest;
-}
+const request = async <T>(path: string, init?: RequestInit): Promise<T> => readJson<T>(await send(path, init));
 
 export const api = {
   deleteNote: (id: string) => request<{ deleted: number }>(`/notes/${id}`, { method: "DELETE" }),
@@ -122,38 +60,29 @@ export const api = {
     request<{ note: Note }>("/notes", {
       method: "POST",
       body: JSON.stringify(input),
-      headers: { "idempotency-key": idempotencyKey },
+      headers: { "content-type": "application/json", "idempotency-key": idempotencyKey },
     }).then((r) => r.note),
-  generate: async (
-    id: string,
-    field: AiField,
-    regenerate: boolean,
-    onPreview: (preview: AiPreview) => void,
-    signal?: AbortSignal,
-  ) => {
+  generate: async (id: string, field: AiField, regenerate: boolean, onPreview: (preview: AiPreview) => void) => {
     const path = `/notes/${id}/${field}${regenerate ? "?regenerate=true" : ""}`;
-    const res = await send(path, { method: "POST", headers: { accept: "text/event-stream" }, signal });
+    const res = await send(path, { method: "POST", headers: { accept: "text/event-stream" } });
     // A failure before any text keeps its HTTP status and arrives as plain JSON.
     if (!res.headers.get("content-type")?.includes("text/event-stream")) return (await readJson<{ note: Note }>(res)).note;
     if (!res.body) throw new ApiError(res.status, "unknown", "The AI response was empty.");
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let note: Note | null = null;
-    const onEvent = (event: string, data: unknown) => {
-      if (event === "preview") onPreview(data as AiPreview);
-      else if (event === "done") note = (data as { note: Note }).note;
-      else if (event === "error") throwApi(res.status, data);
-    };
-    while (true) {
-      const chunk = await reader.read();
-      const text = chunk.value ? decoder.decode(chunk.value, { stream: !chunk.done }) : "";
-      buffer = parseSse(buffer + text, onEvent);
-      if (chunk.done) break;
+    const events = res.body.pipeThrough(new TextDecoderStream()).pipeThrough(new EventSourceParserStream()).getReader();
+    // Any number of previews, then one done or one error.
+    try {
+      while (true) {
+        const next = await events.read();
+        if (next.done) throw new ApiError(res.status, "unknown", "The AI response ended before a result.");
+        const { event, data } = next.value;
+        if (event === "preview") onPreview(JSON.parse(data) as AiPreview);
+        if (event === "error") throwApi(res.status, JSON.parse(data));
+        if (event === "done") return (JSON.parse(data) as { note: Note }).note;
+      }
+    } finally {
+      // Done or error ends the exchange. Let the connection go instead of waiting for the server to close it.
+      void events.cancel().catch(() => {});
     }
-    parseSse(`${buffer}\n\n`, onEvent);
-    if (!note) throw new ApiError(res.status, "unknown", "The AI response ended before a result.");
-    return note;
   },
 };
 

@@ -7,6 +7,7 @@ export class HttpError extends Error {
     readonly status: number,
     readonly code: string,
     message: string,
+    readonly issues?: { path: string; message: string }[],
   ) {
     super(message);
   }
@@ -20,30 +21,23 @@ const AI_ERROR_STATUS: Record<AiErrorCode, number> = {
   refused: 422,
 };
 
-interface ErrorBody {
-  error: { code: string; message: string; issues?: { path: string; message: string }[] };
-}
-
 // Every error response has the shape { error: { code, message, issues? } }.
-export function errorResponse(err: unknown): { status: number; body: ErrorBody } {
+const reply = (status: number, code: string, message: string, issues?: HttpError["issues"]) => ({
+  status,
+  body: { error: { code, message, issues } },
+});
+
+export function errorResponse(err: unknown) {
   if (err instanceof ZodError) {
     const issues = err.issues.map((i) => ({ path: i.path.join("."), message: i.message }));
-    return { status: 400, body: { error: { code: "validation_failed", message: "The request body is invalid.", issues } } };
+    return reply(400, "validation_failed", "The request body is invalid.", issues);
   }
-  if (err instanceof HttpError) {
-    return { status: err.status, body: { error: { code: err.code, message: err.message } } };
-  }
-  if (err instanceof AiError) {
-    return { status: AI_ERROR_STATUS[err.code], body: { error: { code: `ai_${err.code}`, message: err.message } } };
-  }
+  if (err instanceof HttpError) return reply(err.status, err.code, err.message, err.issues);
+  if (err instanceof AiError) return reply(AI_ERROR_STATUS[err.code], `ai_${err.code}`, err.message);
   // express.json() errors carry an HTTP status and a type.
-  if (isEntityError(err, "entity.parse.failed")) {
-    return { status: 400, body: { error: { code: "invalid_json", message: "The request body is not valid JSON." } } };
-  }
-  if (isEntityError(err, "entity.too.large")) {
-    return { status: 413, body: { error: { code: "payload_too_large", message: "The request body is too large." } } };
-  }
-  return { status: 500, body: { error: { code: "internal_error", message: "Something went wrong." } } };
+  if (isEntityError(err, "entity.parse.failed")) return reply(400, "invalid_json", "The request body is not valid JSON.");
+  if (isEntityError(err, "entity.too.large")) return reply(413, "payload_too_large", "The request body is too large.");
+  return reply(500, "internal_error", "Something went wrong.");
 }
 
 // Expected errors already say what went wrong in their response. Only AI failures and unknown errors are logged.

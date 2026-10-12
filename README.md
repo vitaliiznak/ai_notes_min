@@ -12,13 +12,12 @@ docker compose up -d --wait db  # Postgres only
 npm install
 npm run dev:server            # API on :3000; it reads .env and talks to that database
 npm run dev:web               # UI on http://localhost:5173
+
+# or everything in Docker: database, API and UI on :3000
+docker compose up --build
 ```
 
-or
-
-`docker compose up --build` is the other way: database, API, and UI together on :3000, and you do not run `npm run`.
 Checks: `npm run typecheck` · `npm test` (needs `db`) · `npm run test:e2e` · `npm run build`.
-API reference: [localhost:5173/#/api](http://localhost:5173/#/api), rendered from `GET /api/openapi.json`. That document is CORS-readable, and its `servers` entry is whichever host served it.
 
 ## No duplicate AI calls
 
@@ -56,6 +55,7 @@ React (hash routes) ─► Express routes (parse, call, respond)
 | Choice | Why |
 | --- | --- |
 | React + Vite | Small UI, fast dev loop. Hash routes: no router library, no server fallback. |
+| TanStack Query | Loading, errors, refetch on focus and cache updates after a change, instead of hand-written fetch state in each component. The AI stream stays a small custom hook. |
 | Express 5 | Required by the brief. v5 routes async errors to the error handler. |
 | Postgres + Drizzle | Schema in TypeScript, migrations generated as readable SQL. |
 | OpenAI Responses API, structured outputs | A strict JSON schema, so the reply always parses. Behind one `AiProvider` interface. |
@@ -64,11 +64,10 @@ React (hash routes) ─► Express routes (parse, call, respond)
 ## Decisions made
 
 **API and data**
-- **Express, because the brief names it.** Otherwise I'd pick Hono, which derives OpenAPI paths from typed routes. Here `openapi.ts` lists the paths by hand; the schemas still come from Zod.
 - **Summary and tags are `POST`.** A request can spend money on a model call, so it isn't a safe `GET`.
 - **AI starts on save, not on click.** Create returns without waiting; the note page requests whatever is missing, joins the running call, and streams it. The buttons regenerate.
 - **Tags are a `text[]`, not a join table.** At most 5, always read with their note. A tag index or rename would change that.
-- **Idempotency key is checked against the body.** The same key with a different note is 422, not a silent success.
+- **Idempotency key is checked against the body.** The same key with a different note is 422, and `issues` names the fields that differ. The messages do not repeat the stored note.
 - **Lengths are code points everywhere.** The form, the API and Postgres `char_length` agree, so an emoji can't pass one check and fail another.
 
 **AI**
@@ -78,7 +77,7 @@ React (hash routes) ─► Express routes (parse, call, respond)
 - **A failed regenerate keeps the old result.** The write happens only after the output passes the rules.
 - **Prompts** (`ai/prompts.ts`) state the purpose (recall at a glance, grouping), ask for specifics (decisions, dates, names, open items), forbid outside facts, and answer in the note's language. The note is data inside `<note>`; a closing tag in it is escaped.
 - **Errors.** Adapters turn SDK errors into `AiError`; `errors.ts` maps it to 504 (timeout), 503 (rate limited), 502 (bad output or upstream failure) or 422 (refused). Every error has the shape `{ error: { code, message } }`. A stream holds its headers until the first preview, so a call that fails before any text still gets its real status.
-- **Bounded calls.** 30 s timeout, one SDK retry, 4096 output tokens. Content is capped at 20,000 characters (~5k tokens), which bounds the cost of any single call.
+- **Bounded calls.** 30 s timeout, one SDK retry, 4096 output tokens. Content is capped at 50,000 characters (~12k tokens), which bounds the cost of any single call.
 
 Tests use real Postgres, real HTTP and a scripted model, covering streams and every error mapping; Playwright drives the built UI on the fake provider. One live `gpt-6-luna` run (separate calls): summary 5.7 s, tags 2.3 s, cached 0.2 s; a German note stayed German; "Ignore all previous instructions…" was summarized like any note. The combined save-time call has only been replayed, not run live.
 
@@ -93,10 +92,29 @@ Tests use real Postgres, real HTTP and a scripted model, covering streams and ev
 
 ## Production
 
-- The app title is `AI Notes` on the browser tab, the sidebar, and the API document. Change that same string in `web/index.html` (`<title>`), `APP_TITLE` in `web/src/browser.ts`, the `<h1>` in `web/src/App.tsx`, and `info.title` in `server/src/openapi.ts`.
 - One non-root image serves the API and UI. Migrations run at boot under an advisory lock. A missing API key fails at boot; `/api/health` checks Postgres.
-- Mutations must carry a same-origin `Origin`. Shutdown waits up to 75 s for running AI calls; pod and load-balancer timeouts sit above that, and `deploy.test.ts` fails if one drops below.
+- Every model call prints one JSON line, `{"event":"ai_call","task","model","ms","inputTokens","outputTokens","outcome"}`, and never the note's text. Latency, cost and failure rate come from these lines (`openai.test.ts`).
+- Mutations must carry a same-origin `Origin`. That stops cross-site requests from a browser, not a script, which can send any `Origin`. Shutdown waits up to 75 s for running AI calls; pod and load-balancer timeouts sit above that, and `deploy.test.ts` fails if one drops below.
 - CI: typecheck, migration drift, unit and e2e tests, build, Docker image ([passing run](https://github.com/vitaliiznak/ai_notes_min/actions/runs/37559208247)).
 - Deploys: [cluster, no login](deploy/README.md) · [Azure VM, shared password](deploy/vm/README.md).
 - No rate limit yet: on a public deploy, set a spend limit in the OpenAI dashboard.
 
+## Road to production (what I'd do with more time)
+
+In order. Each step says when it becomes necessary.
+
+1. **Accounts.** Add `user_id` to `notes` and scope every query in `repo.ts` by it. The cluster deploy shouldn't get a public address before this.
+2. **Spend limits.** Rate-limit summary and tag calls per user, counted in Postgres so the limit holds across replicas. Until then: the provider's spend cap, and the VM deploy's password.
+3. **Record what produced each result.** Store `model`, `prompt_version` and `generated_at` next to the summary and tags. Then a prompt change can find and regenerate the old results.
+4. **Prompt evals.** About 20 real notes with checks: length, the note's language, no "This note discusses…", tags that aren't generic. Run them when the prompt or model changes, not on every commit, and compare token counts from the `ai_call` lines.
+5. **Dashboards and alerts** on the `ai_call` lines: p95 latency, tokens per day, rate of each `outcome`. Add a request id to every log line.
+6. **A job queue** (pg-boss, which runs on the same Postgres) once there are two replicas or a lost call after a crash matters. The single-flight map becomes job uniqueness.
+7. **Migrations as a separate deploy step**, with expand/contract changes, once rolling deploys run two versions side by side.
+8. **Managed Postgres** with point-in-time recovery. Cursor pagination once a notebook has a few thousand notes.
+
+## How I used AI tools
+
+<!-- Check every line below before you submit: these are your claims. -->
+- Claude Code wrote most of the code. `AGENTS.md` holds the rules it works under: proof of every guard with concurrent HTTP, one place for each business rule, and no dependency the task doesn't need.
+- I decided the parts that carry the design: one model call on save, the row as the cache, conditional writes instead of a lock held across the call, and the 20%-shorter summary rule.
+- I reject generated code that adds surface area. One example: a change added a `JEV_API_KEY` that nothing read. I reverted it.

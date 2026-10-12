@@ -1,50 +1,44 @@
 import { describe, expect, it } from "vitest";
 import { previewModelText } from "../src/notes/enrichment.js";
-import { partialJsonString, partialStringArray } from "../src/notes/preview.js";
 
-describe("partial model text", () => {
-  it("reads complete strings and the unfinished tail", () => {
-    expect(partialStringArray('{"tags":["postgres","upgr', "tags")).toEqual({
-      done: ["postgres"],
-      tail: "upgr",
-    });
+describe("previewModelText", () => {
+  it("shows finished tags and the one still being written", () => {
+    expect(previewModelText("tags", '{"tags":["postgres","upgr')).toEqual({ tags: ["postgres", "upgr"] });
+    expect(previewModelText("tags", '{"tags":["#Postgres","trip ')).toEqual({ tags: ["postgres", "trip"] });
+    expect(previewModelText("tags", '{"tags":["#Post')).toEqual({ tags: ["post"] });
   });
 
-  it("decodes escapes inside a finished string and stops on a dangling escape", () => {
-    expect(partialStringArray('{"tags":["say \\"hi\\"","next', "tags")).toEqual({
-      done: ['say "hi"'],
-      tail: "next",
-    });
-    expect(partialStringArray('{"tags":["hi\\', "tags")).toEqual({ done: [], tail: "hi" });
+  it("decodes escapes and stops before a dangling one", () => {
+    expect(previewModelText("tags", '{"tags":["say \\"hi\\"","next')).toEqual({ tags: ['say "hi"', "next"] });
+    expect(previewModelText("tags", '{"tags":["hi\\')).toEqual({ tags: ["hi"] });
+    expect(previewModelText("summary", '{"summary":"Say \\"hi\\"."}')).toEqual({ summary: 'Say "hi".' });
+    expect(previewModelText("summary", '{"summary":"hi\\')).toEqual({ summary: "hi" });
   });
 
-  it("returns null until the array has started", () => {
-    expect(partialStringArray('{"tags"', "tags")).toBeNull();
-    expect(partialStringArray('{"summary":', "tags")).toBeNull();
+  it("returns null until the field's value has started", () => {
+    expect(previewModelText("tags", "")).toBeNull();
+    expect(previewModelText("tags", '{"tags"')).toBeNull();
+    expect(previewModelText("tags", '{"summary":')).toBeNull();
+    expect(previewModelText("summary", '{"summary"')).toBeNull();
+    expect(previewModelText("summary", '{"summary":"')).toBeNull();
   });
 
-  it("reads a summary string while it is still being written", () => {
-    expect(partialJsonString('{"summary":"Upgrade is Friday.', "summary")).toEqual({
-      value: "Upgrade is Friday.",
-      closed: false,
-    });
-    expect(partialJsonString('{"summary":"Say \\"hi\\"."}', "summary")).toEqual({ value: 'Say "hi".', closed: true });
-    expect(partialJsonString('{"summary":"hi\\', "summary")).toEqual({ value: "hi", closed: false });
-    expect(partialJsonString('{"summary"', "summary")).toBeNull();
-    expect(partialJsonString('{"tags":["summary"],"summary":"Real', "summary")).toEqual({ value: "Real", closed: false });
+  it("reads the summary key, not the same word inside another value", () => {
+    expect(previewModelText("summary", '{"tags":["summary"],"summary":"Real')).toEqual({ summary: "Real" });
   });
 
-  it("turns a partial summary into the text so far, and tags into a normalised list", () => {
+  it("trims the summary so far as it will be stored", () => {
     expect(previewModelText("summary", '{"summary":"\u200bUpgrade is Friday. ')).toEqual({
-      summary: "Upgrade is Friday. ",
+      summary: "Upgrade is Friday.",
     });
     expect(previewModelText("summary", '{"summary":"\u200b  Upgrade is Friday.  "}')).toEqual({
       summary: "Upgrade is Friday.",
     });
+  });
+
+  it("normalises and dedupes finished tags", () => {
     expect(previewModelText("tags", '{"tags":["#Postgres","postgres","Friday"]}')).toEqual({
       tags: ["postgres", "friday"],
     });
-    expect(previewModelText("tags", '{"tags":["#Postgres","trip ')).toEqual({ tags: ["postgres", "trip "] });
-    expect(previewModelText("tags", '{"tags":["#Post')).toEqual({ tags: ["post"] });
   });
 });

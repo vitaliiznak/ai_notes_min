@@ -8,26 +8,14 @@ function isStorableText(value: string): boolean {
   return !value.includes("\0") && !LONE_SURROGATE.test(value);
 }
 
+// Measured after normalizing, as stored. Each check stops the chain, so a field gets one message.
 function userText(max: number, label: string) {
-  const required = `${label} is required.`;
-  const unsupported = `${label} contains a character that can't be stored.`;
-  const tooLong = `${label} must be at most ${max} characters.`;
-  return z.string().transform((value, ctx) => {
-    const text = normalizeUserText(value);
-    if (!isStorableText(text)) {
-      ctx.addIssue({ code: "custom", message: unsupported });
-      return z.NEVER;
-    }
-    if (charLength(text) < 1) {
-      ctx.addIssue({ code: "custom", message: required });
-      return z.NEVER;
-    }
-    if (charLength(text) > max) {
-      ctx.addIssue({ code: "custom", message: tooLong });
-      return z.NEVER;
-    }
-    return text;
-  });
+  return z
+    .string()
+    .transform(normalizeUserText)
+    .refine(isStorableText, { message: `${label} contains a character that can't be stored.`, abort: true })
+    .refine((text) => charLength(text) >= 1, { message: `${label} is required.`, abort: true })
+    .refine((text) => charLength(text) <= max, { message: `${label} must be at most ${max} characters.` });
 }
 
 export const CreateNoteInput = z.object({

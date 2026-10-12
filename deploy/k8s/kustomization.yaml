@@ -6,8 +6,8 @@ resources:
   - postgres.yaml
   - app.yaml
   - ingress.yaml
-# deploy/gke.sh fills newName and newTag in a copy. Applying this file unchanged
-# points the Deployment at a placeholder registry path.
+# stage_bundle in deploy/common.sh fills namespace, newName and newTag in a copy.
+# Applying this file unchanged points the Deployment at a placeholder registry path.
 images:
   - name: ai-notes
     newName: REGION-docker.pkg.dev/PROJECT_ID/ai-notes/ai-notes

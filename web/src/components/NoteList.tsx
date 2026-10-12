@@ -1,49 +1,25 @@
-import { useEffect, useRef } from "react";
-import type { NoteListItem } from "../api";
+import { useQuery } from "@tanstack/react-query";
+import { errorMessage } from "../api";
 import { formatNoteTime } from "../format";
+import { notesQuery } from "../queries";
+import { useTagFilter } from "../tag-filter";
+import { Placeholder } from "./Placeholder";
 import { Tags } from "./Tags";
-
-interface Props {
-  notes: NoteListItem[] | null;
-  error: string | null;
-  selectedId: string | null;
-  onRetry: () => void;
-  /** When set, only notes with this tag are listed. */
-  tag: string | null;
-  onSelectTag: (tag: string) => void;
-  onClearTag: () => void;
-}
 
 // The filtered-by tag goes first, so each listed note shows why it matched.
 function withTagFirst(tags: string[], tag: string | null): string[] {
   return tag && tags.includes(tag) ? [tag, ...tags.filter((t) => t !== tag)] : tags;
 }
 
-export function NoteList({ notes, error, selectedId, onRetry, tag, onSelectTag, onClearTag }: Props) {
-  const selectedRef = useRef<HTMLAnchorElement>(null);
-  const scrolledFor = useRef<string | null>(null);
+// A ref callback runs when the selection moves to a link, not on a list refresh, so the reader's own
+// scrolling stays. The list is hidden on narrow screens while reading.
+function scrollIntoView(link: HTMLAnchorElement | null) {
+  if (link && link.getClientRects().length > 0) link.scrollIntoView({ block: "nearest" });
+}
 
-  useEffect(() => {
-    if (!selectedId || scrolledFor.current === selectedId) return;
-    const el = selectedRef.current;
-    const container = el?.closest(".sidebar-scroll");
-    if (!el || !(container instanceof HTMLElement)) return;
-    const elRect = el.getBoundingClientRect();
-    const cRect = container.getBoundingClientRect();
-    if (cRect.height === 0) return;
-    scrolledFor.current = selectedId;
-    if (elRect.top >= cRect.top && elRect.bottom <= cRect.bottom) return;
-    container.scrollTop += elRect.top - cRect.top - (cRect.height - elRect.height) / 2;
-  }, [selectedId, notes, tag]);
-
-  const alert = error ? (
-    <div className="error-banner" role="alert">
-      <p>{error}</p>
-      <button type="button" className="button-ghost" onClick={onRetry}>
-        Retry
-      </button>
-    </div>
-  ) : null;
+export function NoteList({ selectedId }: { selectedId: string | null }) {
+  const { data: notes, error, refetch } = useQuery(notesQuery);
+  const { tag, show, clear } = useTagFilter();
   const visible = notes && tag ? notes.filter((note) => note.tags?.includes(tag)) : notes;
 
   return (
@@ -59,7 +35,7 @@ export function NoteList({ notes, error, selectedId, onRetry, tag, onSelectTag, 
           )}
         </h2>
         {tag && (
-          <button type="button" className="text-button" onClick={onClearTag}>
+          <button type="button" className="text-button" onClick={clear}>
             Show all
           </button>
         )}
@@ -69,24 +45,23 @@ export function NoteList({ notes, error, selectedId, onRetry, tag, onSelectTag, 
           <p className="visually-hidden" role="status">
             Loading notes…
           </p>
-          <div className="skeleton" aria-hidden="true">
-            <span />
-            <span />
-            <span />
-            <span />
-          </div>
+          <Placeholder className="list-skeleton" lines={4} />
         </>
       )}
-      {!notes && error && alert}
-      {notes && alert}
-      {notes && notes.length === 0 && (
+      {error && (
+        <div className="error-banner" role="alert">
+          <p>{errorMessage(error)}</p>
+          <button type="button" className="button-ghost" onClick={() => void refetch()}>
+            Retry
+          </button>
+        </div>
+      )}
+      {notes?.length === 0 && (
         <p className="sidebar-empty">
           No notes yet. <a href="#/new">Try a sample note</a>.
         </p>
       )}
-      {notes && notes.length > 0 && visible?.length === 0 && (
-        <p className="sidebar-empty">No notes tagged {tag}.</p>
-      )}
+      {notes && notes.length > 0 && visible?.length === 0 && <p className="sidebar-empty">No notes tagged {tag}.</p>}
       {visible && visible.length > 0 && (
         <ul className="note-list">
           {visible.map((note) => (
@@ -94,22 +69,22 @@ export function NoteList({ notes, error, selectedId, onRetry, tag, onSelectTag, 
               <a
                 href={`#/notes/${note.id}`}
                 aria-current={note.id === selectedId ? "page" : undefined}
-                ref={note.id === selectedId ? selectedRef : undefined}
+                ref={note.id === selectedId ? scrollIntoView : undefined}
               >
                 <span className="note-list-title">{note.title}</span>
-                <span className="note-list-meta">
-                  <time dateTime={note.createdAt} title={formatNoteTime(note.createdAt, "full")}>
-                    {formatNoteTime(note.createdAt, "short")}
-                  </time>
-                  {note.tags && (
-                    <Tags
-                      tags={withTagFirst(note.tags, tag).slice(0, 2)}
-                      active={tag}
-                      onSelect={(next) => (next === tag ? onClearTag() : onSelectTag(next))}
-                    />
-                  )}
-                </span>
               </a>
+              <div className="note-list-meta">
+                <time dateTime={note.createdAt} title={formatNoteTime(note.createdAt, "full")}>
+                  {formatNoteTime(note.createdAt, "short")}
+                </time>
+                {note.tags && (
+                  <Tags
+                    tags={withTagFirst(note.tags, tag).slice(0, 2)}
+                    active={tag}
+                    onSelect={(next) => (next === tag ? clear() : show(next))}
+                  />
+                )}
+              </div>
             </li>
           ))}
         </ul>
