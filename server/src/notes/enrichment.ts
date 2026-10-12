@@ -1,108 +1,51 @@
-import { parse } from "partial-json";
-import { AiError, type AiProvider, type OnText, type SummaryAndTagsOutput } from "../ai/provider.js";
-import { HttpError, logServerError } from "../errors.js";
+import type { AiProvider, OnText, SummaryAndTagsOutput } from "../ai/provider.js";
+import { logServerError } from "../errors.js";
+import type { AiField, AiPreview, AiResult, Note } from "../shared/notes.js";
+import { canSummarize, SUMMARY_MIN_CONTENT } from "../shared/rules.js";
+import { acceptSummary, acceptTags, parsePartialField } from "./ai-output.js";
+import { NoteError, noteNotFound } from "./errors.js";
 import type { NotesRepo } from "./repo.js";
-import {
-  canSummarize,
-  charLength,
-  normalizeUserText,
-  SUMMARY_MAX_CHARS,
-  SUMMARY_MIN_CONTENT,
-  summaryCharLimit,
-  TAG_MAX_LENGTH,
-  TAGS_MAX,
-  TAGS_MIN,
-} from "./limits.js";
-import type { AiField, AiPreview, Note } from "./types.js";
 
-/**
- * Business rule: one non-blank text no longer than summaryCharLimit(content).
- * Applies to every provider. A miss is not stored, so the next request tries again.
- */
-export function toSummary(output: { summary?: string }, content: string): string {
-  const summary = normalizeUserText(output.summary ?? "");
-  if (charLength(summary) < 1) {
-    throw new AiError("invalid_output", "Expected a summary.");
-  }
-  const limit = summaryCharLimit(content);
-  if (charLength(summary) > limit) {
-    throw new AiError(
-      "invalid_output",
-      limit < SUMMARY_MAX_CHARS
-        ? "Expected a summary at least 20% shorter than the note."
-        : `Expected a summary of at most ${SUMMARY_MAX_CHARS} characters.`,
-    );
-  }
-  return summary;
-}
-
-// Lowercase, no leading "#" or padding, whitespace collapsed and trimmed.
-function normalizeTag(raw: string): string {
-  return normalizeUserText(normalizeUserText(raw).replace(/^#+/, "")).replace(/\s+/g, " ").toLowerCase();
-}
-
-const fitsTag = (tag: string) => charLength(tag) > 0 && charLength(tag) <= TAG_MAX_LENGTH;
-
-/** Lowercase, strip #, collapse whitespace, drop empties and over-long tags, dedupe, keep 5. */
-function normalizeTags(raw: string[]): string[] {
-  return [...new Set(raw.map(normalizeTag).filter(fitsTag))].slice(0, TAGS_MAX);
-}
-
-/** Business rule: 1–5 distinct, normalized tags. Extras beyond 5 are dropped (the model ranks by relevance). */
-export function toTags(output: { tags?: string[] }): string[] {
-  const tags = normalizeTags(output.tags ?? []);
-  if (tags.length < TAGS_MIN) {
-    throw new AiError("invalid_output", `Expected at least ${TAGS_MIN} ${TAGS_MIN === 1 ? "tag" : "tags"}.`);
-  }
-  return tags;
-}
-
-/**
- * Readable slice of the model's JSON so far (partial-json also reads a string it is still writing),
- * normalized the way it will be stored. Not validated; the finished output still goes through toSummary/toTags.
- */
-export function previewModelText(field: AiField, text: string): AiPreview | null {
-  let value: unknown;
-  try {
-    value = parse(text)?.[field];
-  } catch {
-    return null;
-  }
-  if (field === "summary") {
-    const summary = typeof value === "string" ? normalizeUserText(value) : "";
-    return summary ? { summary } : null;
-  }
-  const tags = Array.isArray(value) ? normalizeTags(value.filter((tag) => typeof tag === "string")) : [];
-  return tags.length > 0 ? { tags } : null;
-}
-
-/** One AI result: previews while the model writes it, then the note with the result saved. */
-export interface AiRun {
+/** One field of a note as a request reads it: previews while the model writes it, then the field as stored. */
+export interface FieldStream {
   /** Calls `onPreview` with the latest preview, if any, then with each new one. Returns a function that stops it. */
   watch(onPreview: (preview: AiPreview) => void): () => void;
-  /** Null when the note does not exist. */
-  note: Promise<Note | null>;
+  /** This call's value, or the one another writer stored first. */
+  result: Promise<AiResult>;
 }
 
-const finished = (note: Note | null): AiRun => ({ watch: () => () => {}, note: Promise.resolve(note) });
+const alreadyStored = (result: AiResult): FieldStream => ({ watch: () => () => {}, result: Promise.resolve(result) });
+
+/** The field as this row stores it. Callers read a field only once it is written, and nothing clears one. */
+function storedField(note: Note, field: AiField): AiResult {
+  if (field === "summary" && note.summary !== null) return { summary: note.summary };
+  if (field === "tags" && note.tags !== null) return { tags: note.tags };
+  throw new Error(`Note ${note.id} has no stored ${field}.`);
+}
+
+interface PreviewFeed {
+  /** Appends the next piece of the model's text. */
+  push(delta: string): void;
+  watch: FieldStream["watch"];
+}
 
 /**
- * Previews of one field, built from the model's text as it arrives. Each preview is the whole field so far,
+ * Previews of one field, parsed from the model's text as it arrives. Each preview is the whole field so far,
  * so a request that joins late only needs the latest one.
  */
-function livePreviews(field: AiField) {
+function createPreviewFeed(field: AiField): PreviewFeed {
   let text = "";
   let latest: AiPreview | null = null;
   const listeners = new Set<(preview: AiPreview) => void>();
   return {
-    onText(delta: string) {
+    push(delta) {
       text += delta;
-      const preview = previewModelText(field, text);
+      const preview = parsePartialField(field, text);
       if (!preview || JSON.stringify(preview) === JSON.stringify(latest)) return;
       latest = preview;
       listeners.forEach((listener) => listener(preview));
     },
-    watch(listener: (preview: AiPreview) => void) {
+    watch(listener) {
       if (latest) listener(latest);
       listeners.add(listener);
       return () => void listeners.delete(listener);
@@ -110,19 +53,33 @@ function livePreviews(field: AiField) {
   };
 }
 
+/** The note a model call read, and what the model returned. No output when every field was already stored. */
+interface CallOutcome {
+  note: Note;
+  output: Partial<SummaryAndTagsOutput> | null;
+}
+
+/** Why some of these promises rejected, each distinct reason once, after all of them have settled. */
+async function distinctFailures(promises: Promise<unknown>[]): Promise<unknown[]> {
+  const settled = await Promise.allSettled(promises);
+  return [...new Set(settled.flatMap((outcome) => (outcome.status === "rejected" ? [outcome.reason] : [])))];
+}
+
 export interface Enricher {
   /**
-   * The note's stored result, or the run that produces it. A JSON client awaits `note`; a streaming one also
-   * watches its previews. Resolves to a null note when the note does not exist.
+   * The note's stored field (skipped when `regenerate`), else the call already writing that field, else a
+   * new model call. A JSON client awaits `result`; a streaming one also watches its previews. Rejects with
+   * a not_found NoteError when the note does not exist, or is deleted before the result is stored.
    */
-  open(noteId: string, field: AiField, opts: { regenerate: boolean }): Promise<AiRun>;
+  enrichField(noteId: string, field: AiField, opts: { regenerate: boolean }): Promise<FieldStream>;
   /**
-   * Starts what a new note gets: tags, plus a summary when it is long enough, from one model call.
-   * Does not wait. A request for either field joins the running call. A failure is logged and not
-   * stored, so the next request tries again.
+   * Fills what a note gets: tags, plus a summary when it is long enough. Skips a field that is stored (unless
+   * `regenerate`) or that a running call is writing; the rest come from one model call. Takes the note, not
+   * its id, so a new note's call is listed before the create request responds and the note page joins it.
+   * Does not wait. A failure is logged and not stored, so the next request tries again.
    */
-  start(note: Note): void;
-  /** Resolves once no AI call is running. */
+  enrichNote(note: Note, opts: { regenerate: boolean }): void;
+  /** Resolves once no model call is running. */
   idle(): Promise<void>;
 }
 
@@ -130,79 +87,99 @@ export interface Enricher {
  * Generates and caches AI results on notes.
  *
  * Duplicate-call protection has two layers:
- * 1. In this process, requests for the same (field, note) share one run while it lasts (`runs` below).
+ * 1. In this process, each field a running call writes is listed in `inFlight` until it settles, and a
+ *    request for that field joins it.
  * 2. Across processes, the conditional write in repo.saveAiResult lets only the first result land;
  *    later writers get the stored value back instead of their own.
  */
 export function createEnricher(repo: NotesRepo, ai: AiProvider): Enricher {
-  const runs = new Map<string, AiRun>();
+  /** The field streams of running calls, under `${field}:${noteId}`. */
+  const inFlight = new Map<string, FieldStream>();
   const keyOf = (field: AiField, noteId: string) => `${field}:${noteId}`;
 
-  /** The provider call that writes these fields. Both at once is what a new long note gets, so its input tokens are paid for once. */
-  function generate(note: Note, fields: AiField[], onText: OnText): Promise<Partial<SummaryAndTagsOutput>> {
-    if (fields.length === 2) return ai.summarizeAndTag(note, onText);
-    return fields[0] === "summary" ? ai.summarize(note, onText) : ai.generateTags(note, onText);
-  }
-
   /**
-   * One model call for the given fields of a note. Each field gets its own run, its own rule and its own
-   * conditional write, so a summary that breaks its rule does not cost the tags. A run stays listed until
-   * it settles, so a request for the same result joins it.
+   * Starts one model call for these fields of a note. Each field gets its own stream, its own rule and its
+   * own write, so a summary that breaks its rule does not cost the tags. Returns the streams in field order.
    */
-  function run(noteId: string, fields: AiField[], overwrite: boolean): AiRun[] {
-    const previews = fields.map((field) => livePreviews(field));
-    const generated = (async () => {
-      // Read again: a run that ended while this request was looking up the note may have stored the result.
-      const note = await repo.get(noteId);
-      if (!note || (!overwrite && fields.every((field) => note[field] !== null))) return { note, output: null };
-      const output = await generate(note, fields, (delta) => previews.forEach((preview) => preview.onText(delta)));
-      return { note, output };
-    })();
-
-    return fields.map((field, i) => {
-      const key = keyOf(field, noteId);
-      const saved = generated.then(({ note, output }) => {
-        if (!note || !output) return note;
-        const result = field === "summary" ? { summary: toSummary(output, note.content) } : { tags: toTags(output) };
-        return repo.saveAiResult(noteId, result, overwrite);
-      });
-      const run: AiRun = {
-        watch: previews[i]!.watch,
-        note: saved.finally(() => {
-          if (runs.get(key) === run) runs.delete(key);
-        }),
-      };
-      // Requests that read the run see its failure. One that nobody reads must not crash the process.
-      void run.note.catch(() => {});
-      runs.set(key, run);
-      return run;
+  function startCall(noteId: string, fields: AiField[], { regenerate }: { regenerate: boolean }): FieldStream[] {
+    const feeds = new Map(fields.map((field) => [field, createPreviewFeed(field)]));
+    const outcome = callModel(noteId, fields, regenerate, (delta) => feeds.forEach((feed) => feed.push(delta)));
+    return [...feeds].map(([field, feed]) => {
+      const stream: FieldStream = { watch: feed.watch, result: outcome.then((o) => storeField(field, o, regenerate)) };
+      trackUntilSettled(keyOf(field, noteId), stream);
+      return stream;
     });
   }
 
+  /**
+   * Reads the note again, then asks the model for these fields. A call that ended while this request was
+   * looking up the note may have stored them already; then there is nothing to ask.
+   */
+  async function callModel(noteId: string, fields: AiField[], regenerate: boolean, onText: OnText): Promise<CallOutcome> {
+    const note = await repo.get(noteId);
+    if (!note) throw noteNotFound();
+    if (!regenerate && fields.every((field) => note[field] !== null)) return { note, output: null };
+    return { note, output: await askProvider(note, fields, onText) };
+  }
+
+  /** Both fields from one request when a new long note needs both, so its input tokens are paid for once. */
+  function askProvider(note: Note, fields: AiField[], onText: OnText): Promise<Partial<SummaryAndTagsOutput>> {
+    const summary = fields.includes("summary");
+    const tags = fields.includes("tags");
+    if (summary && tags) return ai.summarizeAndTag(note, onText);
+    return summary ? ai.summarize(note, onText) : ai.generateTags(note, onText);
+  }
+
+  /** Checks one field of the output against its rule, and stores it. Resolves to the field as the row then holds it. */
+  async function storeField(field: AiField, { note, output }: CallOutcome, regenerate: boolean): Promise<AiResult> {
+    if (!output) return storedField(note, field);
+    const value = field === "summary" ? { summary: acceptSummary(output, note.content) } : { tags: acceptTags(output) };
+    const saved = await repo.saveAiResult(note.id, value, { overwrite: regenerate });
+    // No row: the note was deleted while the model wrote.
+    if (!saved) throw noteNotFound();
+    return storedField(saved, field);
+  }
+
+  /** A field's stream without a new call: its stored value (unless `regenerate`), else the running call writing it. */
+  function existingStream(note: Note, field: AiField, regenerate: boolean): FieldStream | undefined {
+    if (!regenerate && note[field] !== null) return alreadyStored(storedField(note, field));
+    // A regenerate joins a running call too: the model is already writing a new result.
+    return inFlight.get(keyOf(field, note.id));
+  }
+
+  /** Lists a field's stream until it is stored or has failed, so a request for that field joins it. */
+  function trackUntilSettled(key: string, stream: FieldStream) {
+    const untrack = () => {
+      if (inFlight.get(key) === stream) inFlight.delete(key);
+    };
+    inFlight.set(key, stream);
+    // Handling both outcomes also keeps a failure that no request reads from crashing the process.
+    void stream.result.then(untrack, untrack);
+  }
+
   return {
-    async open(noteId, field, { regenerate }) {
+    async enrichField(noteId, field, { regenerate }) {
       const note = await repo.get(noteId);
-      if (!note) return finished(null);
+      if (!note) throw noteNotFound();
       // Business rule: short notes get tags only. Mirrored by notes_summary_min_content_chk in table.ts.
       if (field === "summary" && !canSummarize(note.content)) {
-        throw new HttpError(422, "note_too_short", `Notes under ${SUMMARY_MIN_CONTENT} characters are not summarized.`);
+        throw new NoteError("note_too_short", `Notes under ${SUMMARY_MIN_CONTENT} characters are not summarized.`);
       }
-      if (!regenerate && note[field] !== null) return finished(note);
-      // A regenerate joins a running call too: the model is already writing a new result.
-      return runs.get(keyOf(field, noteId)) ?? run(noteId, [field], regenerate)[0]!;
+      return existingStream(note, field, regenerate) ?? startCall(noteId, [field], { regenerate })[0]!;
     },
-    start(note) {
-      // The note was just stored, so nothing is running for it yet. A short note gets tags only:
-      // a summary of it would be about as long as the note, and the CHECK rejects storing one.
-      const fields: AiField[] = canSummarize(note.content) ? ["summary", "tags"] : ["tags"];
-      // A failed call fails each of its fields with the same error. Log each distinct failure once.
-      void Promise.allSettled(run(note.id, fields, false).map((r) => r.note)).then((results) => {
-        const failures = new Set(results.flatMap((r) => (r.status === "rejected" ? [r.reason] : [])));
-        failures.forEach(logServerError);
-      });
+    enrichNote(note, { regenerate }) {
+      // A short note gets tags only: a summary of it would be about as long as the note, and the CHECK
+      // rejects storing one.
+      const wanted: AiField[] = canSummarize(note.content) ? ["summary", "tags"] : ["tags"];
+      const missing = wanted.filter((field) => !existingStream(note, field, regenerate));
+      if (missing.length === 0) return;
+      const streams = startCall(note.id, missing, { regenerate });
+      // No request may be reading this call, so its failures are logged here. A failed call fails every
+      // field with the same error, which is logged once. A joined call's failures are its readers' to log.
+      void distinctFailures(streams.map((stream) => stream.result)).then((failures) => failures.forEach(logServerError));
     },
     async idle() {
-      while (runs.size > 0) await Promise.allSettled([...runs.values()].map((r) => r.note));
+      while (inFlight.size > 0) await Promise.allSettled([...inFlight.values()].map((stream) => stream.result));
     },
   };
 }

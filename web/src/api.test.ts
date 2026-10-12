@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { api, ApiError, charLength, normalizeUserText } from "./api";
+import { api, ApiError } from "./api";
 
 const NOTE = {
   id: "11111111-1111-4111-8111-111111111111",
@@ -40,23 +40,23 @@ describe("api.generate over a stream", () => {
   const body =
     `event: preview\ndata: {"tags":["café"]}\n\n` +
     `event: preview\ndata: {"tags":["café","ötto"]}\n\n` +
-    `event: done\ndata: ${JSON.stringify({ note: NOTE })}\n\n`;
+    `event: done\ndata: ${JSON.stringify({ tags: NOTE.tags })}\n\n`;
 
   it.each([
     // 7 bytes at a time: no slice lines up with an event boundary, and the é and ö each split in two.
     ["split at arbitrary byte boundaries", body, 7],
     ["in one piece with CRLF line endings", body.replace(/\n/g, "\r\n"), body.length * 2],
-  ])("reads every preview and the stored note from a body %s", async (_, text, sliceBytes) => {
+  ])("reads every preview and the stored tags from a body %s", async (_, text, sliceBytes) => {
     stubFetch(sseResponse(text, sliceBytes));
     const previews: unknown[] = [];
-    const note = await api.generate(NOTE.id, "tags", false, (preview) => previews.push(preview));
+    const result = await api.generate(NOTE.id, "tags", { onPreview: (preview) => previews.push(preview) });
     expect(previews).toEqual([{ tags: ["café"] }, { tags: ["café", "ötto"] }]);
-    expect(note).toEqual(NOTE);
+    expect(result).toEqual({ tags: NOTE.tags });
   });
 
   it("requests a regenerate with the query the server looks for", async () => {
     const fetch = stubFetch(sseResponse(body, 64));
-    await api.generate(NOTE.id, "summary", true, () => {});
+    await api.generate(NOTE.id, "summary", { regenerate: true });
     expect(fetch.mock.calls[0]![0]).toBe(`/api/notes/${NOTE.id}/summary?regenerate=true`);
   });
 
@@ -68,14 +68,14 @@ describe("api.generate over a stream", () => {
         9,
       ),
     );
-    await expect(api.generate(NOTE.id, "tags", false, () => {})).rejects.toThrow(
+    await expect(api.generate(NOTE.id, "tags")).rejects.toThrow(
       "The AI's answer couldn't be used. Try again.",
     );
   });
 
   it("throws when the stream ends without a result", async () => {
     stubFetch(sseResponse(`event: preview\ndata: {"tags":["café"]}\n\n`, 9));
-    await expect(api.generate(NOTE.id, "tags", false, () => {})).rejects.toThrow(
+    await expect(api.generate(NOTE.id, "tags")).rejects.toThrow(
       "The AI response ended before a result.",
     );
   });
@@ -84,7 +84,7 @@ describe("api.generate over a stream", () => {
 describe("api error handling", () => {
   it("keeps the status and code when the request fails before any stream", async () => {
     stubFetch(jsonResponse({ error: { code: "note_too_short", message: "Notes under 500 characters are not summarized." } }, 422));
-    const error = await api.generate(NOTE.id, "summary", false, () => {}).catch((err: unknown) => err);
+    const error = await api.generate(NOTE.id, "summary").catch((err: unknown) => err);
     expect(error).toBeInstanceOf(ApiError);
     expect(error).toMatchObject({ status: 422, code: "note_too_short" });
   });
@@ -114,15 +114,5 @@ describe("api.createNote", () => {
     const init = fetch.mock.calls[0]![1] as RequestInit;
     expect(init.headers).toMatchObject({ "content-type": "application/json", "idempotency-key": NOTE.id });
     expect(note).toEqual(NOTE);
-  });
-});
-
-describe("limits shared with the server", () => {
-  it("counts length in code points, so an emoji is one character", () => {
-    expect(charLength("\u{1f600}\u{1f600}")).toBe(2);
-  });
-
-  it("strips the edge padding the server strips, and keeps inner whitespace", () => {
-    expect(normalizeUserText(" ​ Buy milk\nand bread ﻿")).toBe("Buy milk\nand bread");
   });
 });

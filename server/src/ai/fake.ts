@@ -1,5 +1,5 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import { TAGS_MAX } from "../notes/limits.js";
+import { TAGS_MAX } from "../shared/rules.js";
 import type { AiProvider, NoteText, OnText, SummaryOutput, TagsOutput } from "./provider.js";
 
 const FALLBACK_TAG = "fake-ai";

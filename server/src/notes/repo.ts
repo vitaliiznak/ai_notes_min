@@ -1,18 +1,18 @@
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import type pg from "pg";
-import type { Note, NoteListItem } from "./types.js";
-import type { CreateNoteInput } from "./schema.js";
+import type { Note, NoteListItem } from "../shared/notes.js";
+import type { CreateNoteInput } from "./input.js";
 import { notes } from "./table.js";
 
 type Row = typeof notes.$inferSelect;
 
-function listed(row: Pick<Row, "id" | "title" | "tags" | "createdAt">): NoteListItem {
+function toListItem(row: Pick<Row, "id" | "title" | "tags" | "createdAt">): NoteListItem {
   return { id: row.id, title: row.title, tags: row.tags, createdAt: row.createdAt.toISOString() };
 }
 
 function toNote(row: Row): Note {
-  return { ...listed(row), content: row.content, summary: row.summary };
+  return { ...toListItem(row), content: row.content, summary: row.summary };
 }
 
 export type NotesRepo = ReturnType<typeof createNotesRepo>;
@@ -28,17 +28,17 @@ export function createNotesRepo(pool: pg.Pool) {
   /**
    * Stores an AI result. Without `overwrite` only an empty field is written,
    * so concurrent writers (e.g. two server processes) converge on the first
-   * stored value. Returns the note as it is after the attempt.
+   * stored value. Returns the note as it is after the attempt, or null when it was deleted.
    */
   async function saveAiResult(
     id: string,
-    write: { summary: string } | { tags: string[] },
-    overwrite: boolean,
+    value: { summary: string } | { tags: string[] },
+    { overwrite }: { overwrite: boolean },
   ): Promise<Note | null> {
-    const column = "summary" in write ? notes.summary : notes.tags;
+    const column = "summary" in value ? notes.summary : notes.tags;
     const [row] = await db
       .update(notes)
-      .set(write)
+      .set(value)
       .where(overwrite ? eq(notes.id, id) : and(eq(notes.id, id), isNull(column)))
       .returning();
     return row ? toNote(row) : get(id);
@@ -52,7 +52,7 @@ export function createNotesRepo(pool: pg.Pool) {
         .select({ id: notes.id, title: notes.title, tags: notes.tags, createdAt: notes.createdAt })
         .from(notes)
         .orderBy(desc(notes.createdAt), desc(notes.id));
-      return rows.map(listed);
+      return rows.map(toListItem);
     },
 
     /**

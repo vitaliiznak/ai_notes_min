@@ -1,5 +1,6 @@
-// Mirrored by the CHECK constraints in table.ts. Lengths are code points, like Postgres char_length.
-// The web client imports this file so the form and the API measure a note the same way.
+// Note limits and the text rules they are measured by. The web client imports this file too, so the form and
+// the API measure a note the same way: no Node or server-only imports here.
+// Mirrored by the CHECK constraints in notes/table.ts. Lengths are code points, like Postgres char_length.
 export const TITLE_MAX = 200;
 export const CONTENT_MAX = 50_000; // ~12k tokens: bounds LLM cost and latency per call
 // About a few sentences, with room for a long name or number. A longer text is not a summary.
@@ -15,17 +16,21 @@ export const TAGS_MAX = 5;
 // Below this a note is about as long as a summary of it, so it gets tags only.
 export const SUMMARY_MIN_CONTENT = 500;
 
-// Spaces, newlines, and zero-width padding. ZWJ is included only so it can be stripped at the edges;
+// Spaces, newlines, and zero-width padding (ZWSP, ZWNJ, word joiner, BOM). ZWJ is outside the class
+// so it is not glued to the next character. It is included only so it can be stripped at the edges;
 // a joiner in the middle of a family emoji is not at the edge and stays.
-const EDGE_PAD = /[\s\u200b\u200c\u200d\u2060\ufeff]/u;
+const EDGE_PAD = /(?:[\s\u200b\u200c\u2060\ufeff]|\u200d)/u;
 
 /** Counts code points, as Postgres char_length does, so these rules and the CHECKs in table.ts agree on emoji. */
 export function charLength(text: string): number {
   return [...text].length;
 }
 
-/** Drops leading and trailing whitespace and zero-width padding. The stored note is what the limits measure. */
-export function normalizeUserText(value: string): string {
+/**
+ * Drops leading and trailing whitespace and zero-width padding, from the user's text and the model's alike.
+ * The stored text is what the limits measure.
+ */
+export function trimPadding(value: string): string {
   let start = 0;
   let end = value.length;
   while (start < end && EDGE_PAD.test(value[start]!)) start += 1;

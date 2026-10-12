@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { charLength, CONTENT_MAX, normalizeUserText, TITLE_MAX } from "./limits.js";
+import { charLength, CONTENT_MAX, TITLE_MAX, trimPadding } from "../shared/rules.js";
 
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
 
@@ -12,7 +12,7 @@ function isStorableText(value: string): boolean {
 function userText(max: number, label: string) {
   return z
     .string()
-    .transform(normalizeUserText)
+    .transform(trimPadding)
     .refine(isStorableText, { message: `${label} contains a character that can't be stored.`, abort: true })
     .refine((text) => charLength(text) >= 1, { message: `${label} is required.`, abort: true })
     .refine((text) => charLength(text) <= max, { message: `${label} must be at most ${max} characters.` });

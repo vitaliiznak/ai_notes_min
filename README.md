@@ -17,7 +17,7 @@ npm run dev:web               # UI on http://localhost:5173
 docker compose up --build
 ```
 
-Checks: `npm run typecheck` · `npm test` (needs `db`) · `npm run test:e2e` · `npm run build`.
+Checks: `npm run lint` · `npm run typecheck` · `npm test` (needs `db`) · `npm run test:e2e` · `npm run build`.
 
 ## No duplicate AI calls
 
@@ -28,27 +28,74 @@ Results are cached on the note's row. The hard case is the first request: saving
 | Create | `Idempotency-Key` + `INSERT … ON CONFLICT DO NOTHING` | 10 creates on two instances → one note, one set of calls (`notes.test.ts`) |
 | One process | Single-flight map: every request joins the running call, including the one save started | 10 concurrent, streamed, and 5+5 joining the save's call (`ai-actions.test.ts`) |
 | Two processes | `UPDATE … WHERE summary IS NULL`: first write wins | two instances converge (`ai-actions.test.ts`) |
-| Delete | `DELETE … RETURNING` | concurrent deletes on two instances count each note once (`deletion.test.ts`) |
 
 I removed each guard once and watched its test fail (no map: `expected 10 to be 1`). Two replicas can still each make one call, but the row ends up the same. I rejected a database lock held across the 2–6 s call: ten of them would take every connection in the pool of 10.
 
 ## Design
 
+A request hits `routes.ts` and then one of two modules. `repo.ts` is the only code that talks to Postgres. `enrichment.ts` is the only code that talks to the model: it decides whether a call is allowed, checks the output against the rules in `ai-output.ts`, and asks the repo to store it. OpenAI and the fake provider share that one interface.
+
+```mermaid
+flowchart TB
+  UI["React UI"] -->|"HTTP"| Routes["routes.ts<br/>parse the request, send the response"]
+
+  Routes -->|"list, create, get, delete"| Repo["repo.ts<br/>SQL only"]
+  Routes -->|"summary and tags"| Enrich["enrichment.ts<br/>rules and one shared call"]
+
+  Repo --> DB[("Postgres · notes")]
+  Enrich -->|"store a result that passed"| Repo
+  Enrich --> Provider["AiProvider<br/>OpenAI or fake"]
+
+  classDef client fill:#dbeafe,stroke:#1d4ed8,color:#0f172a
+  classDef http fill:#f4f4f5,stroke:#3f3f46,color:#0f172a
+  classDef data fill:#dcfce7,stroke:#15803d,color:#0f172a
+  classDef ai fill:#ede9fe,stroke:#6d28d9,color:#0f172a
+  class UI client
+  class Routes http
+  class Repo,DB data
+  class Enrich,Provider ai
 ```
-React (hash routes) ─► Express routes (parse, call, respond)
-                         ├─► notes/repo.ts ── Drizzle ──► Postgres (one table)
-                         └─► notes/enrichment.ts (rules, single-flight) ─► AiProvider: OpenAI | fake
+
+Blue is the UI, green is the note, purple is the model. The row is the cache: a `NULL` summary or `NULL` tags means that result is not stored yet.
+
+Saving does not wait on the model. The insert returns, then one call fills tags and, for a note of 500 characters or more, the summary. Opening the note joins that call instead of starting another.
+
+```mermaid
+sequenceDiagram
+  participant UI as React
+  participant Routes as routes
+  participant DB as Postgres
+  participant Enrich as enrichment
+  participant Model as model
+
+  UI->>Routes: POST /api/notes
+  Routes->>DB: insert the row
+  Routes-->>UI: 201, summary and tags still empty
+  Routes-)Enrich: start, do not wait
+  Note over Enrich,Model: Tags always. A summary only when the note is long enough.
+  Enrich->>Model: one call
+  UI->>Routes: POST /summary or /tags
+  Routes->>Enrich: join the call if it is still running
+  Model-->>Enrich: text as it arrives
+  Enrich-->>Routes: preview of that field
+  Routes-->>UI: preview events, when the client asked to stream
+  Enrich->>DB: write each field that passes its own rule
+  Routes-->>UI: done, or one JSON body with the stored field
 ```
+
+`?regenerate=true` makes a new call and may overwrite. Text that breaks a rule is not written, so a failed regenerate leaves the previous summary or tags on the row.
+
+The in-memory objects, the path of one model chunk, and the path of the finished JSON: [How enrichment works](docs/enrichment.md).
 
 | Endpoint | Does |
 | --- | --- |
 | `GET /api/notes` | List, newest first, without content. |
 | `POST /api/notes` | Create. Optional `Idempotency-Key` (UUID). Returns 201 at once; tags (and summary) are generated after. |
 | `GET /api/notes/:id` | The full note. |
-| `POST /api/notes/:id/summary`, `…/tags` | The stored result, or one call to make it. `?regenerate=true` forces a new one. `Accept: text/event-stream` streams `preview` events, then `done`. |
+| `POST /api/notes/:id/summary`, `…/tags` | The stored result, or one call to make it. Returns only that field, `{ summary }` or `{ tags }`: the other one may still be generating. `?regenerate=true` forces a new one; any value other than `true` or `false` is a 400. `Accept: text/event-stream` streams `preview` events, then `done`, each in that same shape. |
 | `DELETE /api/notes/:id`, `/api/notes` | Delete one, or all. |
 
-**Schema** (`notes/table.ts`): `id, title, content, summary, tags text[], created_at, idempotency_key`. A `NULL` summary or tags means "not generated yet", so the row is the cache. `CHECK`s enforce every limit in `notes/limits.ts`, and an index on `(created_at, id) DESC` serves the list.
+**Schema** (`notes/table.ts`): `id, title, content, summary, tags text[], created_at, idempotency_key`. A `NULL` summary or tags means "not generated yet", so the row is the cache. `CHECK`s enforce every limit in `shared/rules.ts`, and an index on `(created_at, id) DESC` serves the list.
 
 ## Tech stack
 
@@ -72,7 +119,7 @@ React (hash routes) ─► Express routes (parse, call, respond)
 
 **AI**
 - **One call on save.** Tags and summary come back in one response, so the note's tokens are paid once. Tags are first in the schema, so they stream first. Each result is checked and stored separately: a bad summary doesn't drop the tags.
-- **One place for the rules.** `notes/enrichment.ts` checks every provider's output: 1–5 tags (lowercased, `#` stripped, deduped); a summary of at most 590 characters and at least 20% shorter than the note. Output that breaks a rule isn't stored, so the next request retries. The `CHECK`s repeat the limits.
+- **One place for the rules.** `notes/ai-output.ts` checks every provider's output: 1–5 tags (lowercased, `#` stripped, deduped); a summary of at most 590 characters and at least 20% shorter than the note. Output that breaks a rule isn't stored, so the next request retries. The `CHECK`s repeat the limits.
 - **No summary under 500 characters.** It would be about as long as the note. Those notes get tags only, and the UI says why.
 - **A failed regenerate keeps the old result.** The write happens only after the output passes the rules.
 - **Prompts** (`ai/prompts.ts`) state the purpose (recall at a glance, grouping), ask for specifics (decisions, dates, names, open items), forbid outside facts, and answer in the note's language. The note is data inside `<note>`; a closing tag in it is escaped.

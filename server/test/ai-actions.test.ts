@@ -1,7 +1,10 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
-import { AiError, type AiErrorCode } from "../src/ai/provider.js";
+import { AiError } from "../src/ai/provider.js";
 import { createPool } from "../src/db.js";
-import { SUMMARY_MAX_CHARS, SUMMARY_MIN_CONTENT } from "../src/notes/limits.js";
+import { createEnricher } from "../src/notes/enrichment.js";
+import { createNotesRepo } from "../src/notes/repo.js";
+import type { AiErrorCode } from "../src/shared/error-codes.js";
+import { SUMMARY_MAX_CHARS, SUMMARY_MIN_CONTENT } from "../src/shared/rules.js";
 import { call, LONG_NOTE, sameOriginHeaders, scriptedAi, startServer, TEST_DATABASE_URL, type TestServer } from "./helpers.js";
 
 const pool = createPool(TEST_DATABASE_URL);
@@ -84,13 +87,13 @@ describe.each([
 ] as const)("POST /api/notes/:id/$field", ({ field, first, second, lastPreview }) => {
   const path = (id: string) => `/api/notes/${id}/${field}`;
 
-  it("generates the result, stores it and returns the updated note", async () => {
+  it("generates the result, stores it and returns only that field", async () => {
     const { ai, api, id } = await setup();
 
     const res = await api("POST", path(id));
 
     expect(res.status).toBe(200);
-    expect(res.body.note[field]).toEqual(first);
+    expect(res.body).toEqual({ [field]: first });
     expect((await api("GET", `/api/notes/${id}`)).body.note[field]).toEqual(first);
     expect(ai.calls[field]).toBe(1);
   });
@@ -101,7 +104,7 @@ describe.each([
 
     const res = await api("POST", path(id));
 
-    expect(res.body.note[field]).toEqual(first);
+    expect(res.body[field]).toEqual(first);
     expect(ai.calls[field]).toBe(1);
   });
 
@@ -111,10 +114,23 @@ describe.each([
 
     const res = await api("POST", `${path(id)}?regenerate=true`);
 
-    expect(res.body.note[field]).toEqual(second);
+    expect(res.body[field]).toEqual(second);
     expect((await api("GET", `/api/notes/${id}`)).body.note[field]).toEqual(second);
     expect(ai.calls[field]).toBe(2);
   });
+
+  it.each(["?regenerate=1", "?regenerate", "?regenerate=true&regenerate=true"])(
+    "rejects %s with 400 without calling the AI",
+    async (query) => {
+      const { ai, api, id } = await setup();
+
+      const res = await api("POST", `${path(id)}${query}`);
+
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe("invalid_regenerate");
+      expect(ai.calls[field]).toBe(0);
+    },
+  );
 
   it("returns 404 for an unknown note without calling the AI", async () => {
     const ai = scriptedAi();
@@ -143,7 +159,7 @@ describe.each([
     const results = await Promise.all(Array.from({ length: 10 }, () => api("POST", path(id))));
 
     expect(results.map((r) => r.status)).toEqual(Array(10).fill(200));
-    expect(results.map((r) => r.body.note[field])).toEqual(Array(10).fill(first));
+    expect(results.map((r) => r.body[field])).toEqual(Array(10).fill(first));
     expect(ai.calls[field]).toBe(1);
   });
 
@@ -154,7 +170,7 @@ describe.each([
     const results = await Promise.all(Array.from({ length: 5 }, () => api("POST", `${path(id)}?regenerate=true`)));
 
     expect(results.map((r) => r.status)).toEqual(Array(5).fill(200));
-    expect(results.map((r) => r.body.note[field])).toEqual(Array(5).fill(second));
+    expect(results.map((r) => r.body[field])).toEqual(Array(5).fill(second));
     expect(ai.calls[field]).toBe(2);
   });
 
@@ -173,7 +189,7 @@ describe.each([
     // and every response reports the stored value, never its own losing result.
     expect(ai.calls[field]).toBe(2);
     const stored = (await apiA("GET", `/api/notes/${id}`)).body.note[field];
-    expect(results.map((r) => r.body.note[field])).toEqual(Array(10).fill(stored));
+    expect(results.map((r) => r.body[field])).toEqual(Array(10).fill(stored));
   });
 
   it("returns each instance's own regenerate result, and later reads agree", async () => {
@@ -189,7 +205,7 @@ describe.each([
 
     expect([a.status, b.status]).toEqual([200, 200]);
     expect(ai.calls[field]).toBe(2);
-    const returned = [a.body.note[field], b.body.note[field]];
+    const returned = [a.body[field], b.body[field]];
     expect(returned).toContainEqual(first);
     expect(returned).toContainEqual(second);
     const storedA = (await apiA("GET", `/api/notes/${id}`)).body.note[field];
@@ -234,7 +250,7 @@ describe.each([
     expect(ai.calls[field]).toBe(2);
   });
 
-  it("streams previews and then the stored note when the client accepts event-stream", async () => {
+  it("streams previews and then the stored field when the client accepts event-stream", async () => {
     const { ai, api, id } = await setup();
 
     const res = await postStream(api, path(id));
@@ -248,7 +264,7 @@ describe.each([
     expect(closing).toBeDefined();
     expect(JSON.stringify(opening?.data).length).toBeLessThan(JSON.stringify(closing?.data).length);
     expect(closing?.data).toEqual(lastPreview);
-    expect(res.events.at(-1)).toMatchObject({ event: "done", data: { note: { [field]: first } } });
+    expect(res.events.at(-1)).toEqual({ event: "done", data: { [field]: first } });
     expect((await api("GET", `/api/notes/${id}`)).body.note[field]).toEqual(first);
     expect(ai.calls[field]).toBe(1);
   });
@@ -260,7 +276,7 @@ describe.each([
     const res = await postStream(api, path(id));
 
     expect(res.events.map((event) => event.event)).toEqual(["done"]);
-    expect(res.events[0]?.data.note[field]).toEqual(first);
+    expect(res.events[0]?.data[field]).toEqual(first);
     expect(ai.calls[field]).toBe(1);
   });
 
@@ -270,7 +286,7 @@ describe.each([
 
     const res = await postStream(api, `${path(id)}?regenerate=true`);
 
-    expect(res.events.at(-1)).toMatchObject({ event: "done", data: { note: { [field]: second } } });
+    expect(res.events.at(-1)).toMatchObject({ event: "done", data: { [field]: second } });
     expect(ai.calls[field]).toBe(2);
   });
 
@@ -280,7 +296,7 @@ describe.each([
     const results = await Promise.all(Array.from({ length: 10 }, () => postStream(api, path(id))));
 
     expect(results.map((result) => result.status)).toEqual(Array(10).fill(200));
-    expect(results.map((result) => result.events.at(-1)?.data.note[field])).toEqual(Array(10).fill(first));
+    expect(results.map((result) => result.events.at(-1)?.data[field])).toEqual(Array(10).fill(first));
     expect(ai.calls[field]).toBe(1);
   });
 
@@ -298,7 +314,7 @@ describe.each([
   });
 
   it("sends an error event and stores nothing when streamed text fails validation", async () => {
-    const { ai, api, id } = await setup({
+    const { api, id } = await setup({
       summarize: () => ({ summary: "x".repeat(SUMMARY_MAX_CHARS + 1) }),
       generateTags: () => ({ tags: [] }),
     }, { title: "Long", content: "n".repeat(SUMMARY_MAX_CHARS * 2) });
@@ -344,7 +360,7 @@ describe("AI output rules (applied to every provider's output)", () => {
     const { res } = await summarizeWith("\u200b  Upgrade is Friday.  \u200b");
 
     expect(res.status).toBe(200);
-    expect(res.body.note.summary).toBe("Upgrade is Friday.");
+    expect(res.body.summary).toBe("Upgrade is Friday.");
   });
 
   it("rejects a blank summary with 502 and stores nothing", async () => {
@@ -359,13 +375,13 @@ describe("AI output rules (applied to every provider's output)", () => {
   it("normalises tags: strips #, lowercases, collapses spaces and removes duplicates", async () => {
     const { res } = await tagWith(["#Postgres", "postgres", "  Trip   Planning ", "Q3 BUDGET"]);
 
-    expect(res.body.note.tags).toEqual(["postgres", "trip planning", "q3 budget"]);
+    expect(res.body.tags).toEqual(["postgres", "trip planning", "q3 budget"]);
   });
 
   it("keeps the 5 most relevant tags when the model returns more", async () => {
     const { res } = await tagWith(["a1", "b2", "c3", "d4", "e5", "f6", "g7"]);
 
-    expect(res.body.note.tags).toEqual(["a1", "b2", "c3", "d4", "e5"]);
+    expect(res.body.tags).toEqual(["a1", "b2", "c3", "d4", "e5"]);
   });
 
   it("drops tags longer than 40 characters and keeps a tag of exactly 40", async () => {
@@ -373,14 +389,14 @@ describe("AI output rules (applied to every provider's output)", () => {
     const { res } = await tagWith(["postgres", exact, "x".repeat(41), "friday"]);
 
     expect(res.status).toBe(200);
-    expect(res.body.note.tags).toEqual(["postgres", exact, "friday"]);
+    expect(res.body.tags).toEqual(["postgres", exact, "friday"]);
   });
 
   it("keeps a single tag when the others are too long to store", async () => {
     const { res } = await tagWith(["postgres", "x".repeat(41), "y".repeat(41)]);
 
     expect(res.status).toBe(200);
-    expect(res.body.note.tags).toEqual(["postgres"]);
+    expect(res.body.tags).toEqual(["postgres"]);
   });
 
   it("sends summary text before storing it, and catches a second client up", async () => {
@@ -401,13 +417,15 @@ describe("AI output rules (applied to every provider's output)", () => {
     expect((await api("GET", `/api/notes/${id}`)).body.note.summary).toBeNull();
 
     const second = await postStream(api, `/api/notes/${id}/summary`);
-    while (!(await reader.read()).done) {}
+    while (!(await reader.read()).done) {
+      // Read the first stream to the end so its connection closes before the assertions.
+    }
 
     expect(ai.calls.summary).toBe(1);
     expect(second.events.some((event) => event.event === "preview" && typeof event.data.summary === "string")).toBe(true);
     expect(second.events.at(-1)).toMatchObject({
       event: "done",
-      data: { note: { summary: "Summary 1. Second sentence." } },
+      data: { summary: "Summary 1. Second sentence." },
     });
     expect((await api("GET", `/api/notes/${id}`)).body.note.summary).toBe("Summary 1. Second sentence.");
   });
@@ -448,17 +466,17 @@ describe("AI output rules (applied to every provider's output)", () => {
     const { res } = await tagWith(["postgres", exact, "😀".repeat(41), "friday"]);
 
     expect(res.status).toBe(200);
-    expect(res.body.note.tags).toEqual(["postgres", exact, "friday"]);
+    expect(res.body.tags).toEqual(["postgres", exact, "friday"]);
   });
 
   it("stores one tag, and collapses duplicates without requiring more", async () => {
     const one = await tagWith(["Postgres"]);
     expect(one.res.status).toBe(200);
-    expect(one.res.body.note.tags).toEqual(["postgres"]);
+    expect(one.res.body.tags).toEqual(["postgres"]);
 
     const two = await tagWith(["postgres", "\u200b#Postgres", "upgrade"]);
     expect(two.res.status).toBe(200);
-    expect(two.res.body.note.tags).toEqual(["postgres", "upgrade"]);
+    expect(two.res.body.tags).toEqual(["postgres", "upgrade"]);
   });
 
   it("rejects a result with no usable tags and stores nothing", async () => {
@@ -530,7 +548,7 @@ describe("POST /api/notes starts the AI results", () => {
 
     const res = await api("POST", `/api/notes/${id}/summary`);
 
-    expect(res.body.note.summary).toBe("Summary 1. Second sentence.");
+    expect(res.body.summary).toBe("Summary 1. Second sentence.");
     expect(ai.calls).toEqual({ summary: 1, tags: 0, summaryAndTags: 1 });
   });
 
@@ -549,7 +567,11 @@ describe("POST /api/notes starts the AI results", () => {
 
     const res = await api("POST", `/api/notes/${id}/summary`);
 
-    expect(res.body.note).toMatchObject({ summary: "Summary 1. Second sentence.", tags: ["postgres", "upgrade", "friday"] });
+    expect(res.body).toEqual({ summary: "Summary 1. Second sentence." });
+    expect((await api("GET", `/api/notes/${id}`)).body.note).toMatchObject({
+      summary: "Summary 1. Second sentence.",
+      tags: ["postgres", "upgrade", "friday"],
+    });
     expect(ai.calls).toEqual({ summary: 1, tags: 0, summaryAndTags: 1 });
   });
 
@@ -569,7 +591,8 @@ describe("POST /api/notes starts the AI results", () => {
     const res = await api("POST", `/api/notes/${id}/tags`);
 
     expect(res.status).toBe(200);
-    expect(res.body.note).toMatchObject({
+    expect(res.body).toEqual({ tags: ["tag-1", "alpha", "beta"] });
+    expect((await api("GET", `/api/notes/${id}`)).body.note).toMatchObject({
       summary: "Upgrade is Friday. Second sentence.",
       tags: ["tag-1", "alpha", "beta"],
     });
@@ -587,7 +610,7 @@ describe("POST /api/notes starts the AI results", () => {
     const fromB = await apiB("POST", `/api/notes/${id}/summary`);
     await apiA.idle();
 
-    expect(fromB.body.note.summary).toBe("From B. Stored first.");
+    expect(fromB.body.summary).toBe("From B. Stored first.");
     expect((await apiA("GET", `/api/notes/${id}`)).body.note).toMatchObject({
       summary: "From B. Stored first.",
       tags: ["tag-1", "alpha", "beta"],
@@ -607,7 +630,7 @@ describe.each([
 
     const results = await Promise.all(Array.from({ length: 10 }, () => api("POST", `/api/notes/${id}/${field}`)));
 
-    expect(results.map((r) => r.body.note[field])).toEqual(Array(10).fill(first));
+    expect(results.map((r) => r.body[field])).toEqual(Array(10).fill(first));
     expect(ai.calls).toEqual({ summary: 0, tags: 0, summaryAndTags: 1 });
   });
 
@@ -619,7 +642,7 @@ describe.each([
     const res = await postStream(api, `/api/notes/${id}/${field}`);
 
     expect(res.events.some((event) => event.event === "preview")).toBe(true);
-    expect(res.events.at(-1)).toMatchObject({ event: "done", data: { note: { [field]: first } } });
+    expect(res.events.at(-1)).toMatchObject({ event: "done", data: { [field]: first } });
     expect(ai.calls).toEqual({ summary: 0, tags: 0, summaryAndTags: 1 });
   });
 });
@@ -635,12 +658,59 @@ describe("POST /api/notes/:id/summary and /tags while the new note is still gene
     );
 
     expect(results.map((r) => r.status)).toEqual(Array(10).fill(200));
-    expect(results.filter((_, i) => i % 2 === 0).map((r) => r.body.note.summary)).toEqual(
+    expect(results.filter((_, i) => i % 2 === 0).map((r) => r.body.summary)).toEqual(
       Array(5).fill("Summary 1. Second sentence."),
     );
-    expect(results.filter((_, i) => i % 2 === 1).map((r) => r.body.note.tags)).toEqual(
+    expect(results.filter((_, i) => i % 2 === 1).map((r) => r.body.tags)).toEqual(
       Array(5).fill(["tag-1", "alpha", "beta"]),
     );
+    expect(ai.calls).toEqual({ summary: 0, tags: 0, summaryAndTags: 1 });
+  });
+});
+
+// No endpoint reruns it yet, so these call the enricher directly, on a note that is already saved.
+describe("enrichNote on a saved note", () => {
+  function enricherWith(script?: Parameters<typeof scriptedAi>[0]) {
+    const ai = scriptedAi(script);
+    const repo = createNotesRepo(pool);
+    return { ai, repo, enricher: createEnricher(repo, ai.provider) };
+  }
+
+  it("joins the call already writing one field, and makes one call for the other", async () => {
+    const { ai, repo, enricher } = enricherWith({ delayMs: 200 });
+    const id = await createNote();
+
+    const tags = await enricher.enrichField(id, "tags", { regenerate: false });
+    enricher.enrichNote((await repo.get(id))!, { regenerate: false });
+    await enricher.idle();
+
+    expect(await tags.result).toEqual({ tags: ["tag-1", "alpha", "beta"] });
+    expect(await repo.get(id)).toMatchObject({ summary: "Summary 1. Second sentence.", tags: ["tag-1", "alpha", "beta"] });
+    expect(ai.calls).toEqual({ summary: 1, tags: 1, summaryAndTags: 0 });
+  });
+
+  it("keeps a stored field, and makes one call for the missing one", async () => {
+    const { ai, repo, enricher } = enricherWith();
+    const id = await createNote();
+    await repo.saveAiResult(id, { summary: "Stored summary." }, { overwrite: false });
+
+    enricher.enrichNote((await repo.get(id))!, { regenerate: false });
+    await enricher.idle();
+
+    expect(await repo.get(id)).toMatchObject({ summary: "Stored summary.", tags: ["tag-1", "alpha", "beta"] });
+    expect(ai.calls).toEqual({ summary: 0, tags: 1, summaryAndTags: 0 });
+  });
+
+  it("replaces both stored fields from one call when regenerating", async () => {
+    const { ai, repo, enricher } = enricherWith();
+    const id = await createNote();
+    await repo.saveAiResult(id, { summary: "Old summary." }, { overwrite: false });
+    await repo.saveAiResult(id, { tags: ["old"] }, { overwrite: false });
+
+    enricher.enrichNote((await repo.get(id))!, { regenerate: true });
+    await enricher.idle();
+
+    expect(await repo.get(id)).toMatchObject({ summary: "Summary 1. Second sentence.", tags: ["tag-1", "alpha", "beta"] });
     expect(ai.calls).toEqual({ summary: 0, tags: 0, summaryAndTags: 1 });
   });
 });
@@ -674,11 +744,11 @@ describe("summary of a short note", () => {
   });
 
   it("does not stop the note from being tagged", async () => {
-    const { ai, api, id } = await setup(undefined, short);
+    const { api, id } = await setup(undefined, short);
 
     const res = await api("POST", `/api/notes/${id}/tags`);
 
     expect(res.status).toBe(200);
-    expect(res.body.note.tags).toEqual(["tag-1", "alpha", "beta"]);
+    expect(res.body.tags).toEqual(["tag-1", "alpha", "beta"]);
   });
 });

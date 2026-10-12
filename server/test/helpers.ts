@@ -3,7 +3,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import pg from "pg";
 import type { AiProvider, OnText, SummaryAndTagsOutput, SummaryOutput, TagsOutput } from "../src/ai/provider.js";
 import { createApp } from "../src/app.js";
-import { canSummarize } from "../src/notes/limits.js";
+import { canSummarize } from "../src/shared/rules.js";
 
 export const TEST_DATABASE_URL =
   process.env.TEST_DATABASE_URL ?? "postgres://notes:notes@localhost:5432/notes_test";

@@ -1,4 +1,4 @@
-import express, { type Express, type Request } from "express";
+import express, { type Express, type Request, type RequestHandler } from "express";
 import type pg from "pg";
 import type { AiProvider } from "./ai/provider.js";
 import { errorHandler, HttpError } from "./errors.js";
@@ -26,18 +26,21 @@ function isSameOrigin(req: Request): boolean {
   }
 }
 
+// Browsers cache Basic credentials at the gateway. Allow a mutation only when
+// Origin's host is this host. A missing Origin is not same-origin: a script
+// can omit it and loop ?regenerate=true against the AI key.
+const rejectCrossSiteMutations: RequestHandler = (req, _res, next) => {
+  const mutation = !["GET", "HEAD", "OPTIONS"].includes(req.method);
+  if (mutation && (!isSameOrigin(req) || req.get("sec-fetch-site") === "cross-site")) {
+    throw new HttpError(403, "cross_site_request", "Cross-site changes are not allowed.");
+  }
+  next();
+};
+
 export function createApp({ pool, ai, staticDir }: AppDeps): App {
   const app = express();
   app.disable("x-powered-by");
-  // Browsers cache Basic credentials at the gateway. Allow a mutation only when
-  // Origin's host is this host. A missing Origin is not same-origin: a script
-  // can omit it and loop ?regenerate=true against the AI key.
-  app.use((req, _res, next) => {
-    if (!["GET", "HEAD", "OPTIONS"].includes(req.method) && (!isSameOrigin(req) || req.get("sec-fetch-site") === "cross-site")) {
-      throw new HttpError(403, "cross_site_request", "Cross-site changes are not allowed.");
-    }
-    next();
-  });
+  app.use(rejectCrossSiteMutations);
   app.use(express.json({ limit: "256kb" }));
 
   app.get("/api/health", async (_req, res) => {
@@ -51,8 +54,8 @@ export function createApp({ pool, ai, staticDir }: AppDeps): App {
   });
 
   const repo = createNotesRepo(pool);
-  const enrich = createEnricher(repo, ai);
-  app.use("/api", notesRouter(repo, enrich));
+  const enricher = createEnricher(repo, ai);
+  app.use("/api", notesRouter(repo, enricher));
   app.use("/api", () => {
     throw new HttpError(404, "not_found", "Route not found.");
   });
@@ -61,5 +64,5 @@ export function createApp({ pool, ai, staticDir }: AppDeps): App {
   if (staticDir) app.use(express.static(staticDir));
 
   app.use(errorHandler);
-  return { app, idle: enrich.idle };
+  return { app, idle: enricher.idle };
 }

@@ -1,8 +1,9 @@
 import { z } from "zod";
+import type { AiErrorCode } from "../shared/error-codes.js";
 
 /**
  * Raw shapes the model is asked to produce. Business rules (summaryCharLimit,
- * up to 5 tags) are enforced once, in notes/enrichment.ts, for every provider.
+ * up to 5 tags) are enforced once, in notes/ai-output.ts, for every provider.
  * Length stays out of this schema so a maximum cannot cut a word.
  */
 export const SummaryOutput = z.object({ summary: z.string() });
@@ -29,7 +30,8 @@ export interface AiProvider {
   summarizeAndTag(note: NoteText, onText?: OnText): Promise<SummaryAndTagsOutput>;
 }
 
-export type AiErrorCode = "timeout" | "rate_limited" | "unavailable" | "refused" | "invalid_output";
+/** Retries an adapter may make after a failed attempt. Shutdown waits for every attempt (drainBudgetMs in config.ts). */
+export const AI_MAX_RETRIES = 1;
 
 export class AiError extends Error {
   constructor(

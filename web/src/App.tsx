@@ -1,30 +1,14 @@
 import { useQuery } from "@tanstack/react-query";
-import { useState, useSyncExternalStore } from "react";
-import type { NoteListItem } from "./api";
-import { DeleteNotes } from "./components/DeleteNotes";
+import { useState } from "react";
+import { DeleteAllNotes } from "./components/DeleteNotes";
 import { NoteIcon, PlusIcon } from "./components/icons";
 import { NewNoteForm } from "./components/NewNoteForm";
 import { NoteDetail } from "./components/NoteDetail";
 import { NoteList } from "./components/NoteList";
 import { notesQuery } from "./queries";
+import { href, navigate, useHashRoute } from "./routes";
+import type { NoteListItem } from "./shared";
 import { TagFilterContext } from "./tag-filter";
-
-type Route = { name: "home" } | { name: "new" } | { name: "note"; id: string };
-
-function parseRoute(hash: string): Route {
-  if (hash === "#/new") return { name: "new" };
-  const match = /^#\/notes\/([^/]+)$/.exec(hash);
-  return match ? { name: "note", id: match[1]! } : { name: "home" };
-}
-
-function subscribeToHash(onChange: () => void) {
-  window.addEventListener("hashchange", onChange);
-  return () => window.removeEventListener("hashchange", onChange);
-}
-
-function useHashRoute(): Route {
-  return parseRoute(useSyncExternalStore(subscribeToHash, () => window.location.hash));
-}
 
 export function App() {
   const route = useHashRoute();
@@ -33,9 +17,9 @@ export function App() {
   const [tag, setTag] = useState<string | null>(null);
   const tagFilter = {
     tag,
-    show: (next: string) => {
+    filterBy: (next: string) => {
       setTag(next);
-      window.location.hash = "#/";
+      navigate(href.home);
     },
     clear: () => setTag(null),
   };
@@ -51,7 +35,7 @@ export function App() {
               </span>
               <h1>AI Notes</h1>
             </div>
-            <a className="button button-new" href="#/new" aria-current={route.name === "new" ? "page" : undefined}>
+            <a className="button button-new" href={href.newNote} aria-current={route.name === "new" ? "page" : undefined}>
               <PlusIcon />
               New note
             </a>
@@ -61,7 +45,7 @@ export function App() {
           </div>
           {notes && notes.length > 0 && (
             <div className="sidebar-footer">
-              <DeleteNotes />
+              <DeleteAllNotes />
             </div>
           )}
         </aside>
@@ -81,9 +65,9 @@ function Home({ notes }: { notes: NoteListItem[] | undefined }) {
   return (
     <p className="empty-state">
       {notes.length === 0 ? (
-        <>No notes yet. <a href="#/new">Write one, or start from a sample</a>.</>
+        <>No notes yet. <a href={href.newNote}>Write one, or start from a sample</a>.</>
       ) : (
-        <>Pick a note from the list, or <a href="#/new">write a new one</a>.</>
+        <>Pick a note from the list, or <a href={href.newNote}>write a new one</a>.</>
       )}
     </p>
   );

@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createPool, migrateSchema } from "../src/db.js";
-import { CONTENT_MAX, SUMMARY_MAX_CHARS, SUMMARY_MIN_CONTENT, TAG_MAX_LENGTH, TITLE_MAX } from "../src/notes/limits.js";
+import { CONTENT_MAX, SUMMARY_MAX_CHARS, SUMMARY_MIN_CONTENT, TAG_MAX_LENGTH, TITLE_MAX } from "../src/shared/rules.js";
 import { TEST_DATABASE_URL, withAdmin } from "./helpers.js";
 
 const dbName = "notes_empty";

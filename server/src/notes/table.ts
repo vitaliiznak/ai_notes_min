@@ -10,7 +10,7 @@ import {
   TAGS_MAX,
   TAGS_MIN,
   TITLE_MAX,
-} from "./limits.js";
+} from "../shared/rules.js";
 
 // The schema's single source. After changing it, run `npm run db:generate -w server` and commit the new migration.
 // Limits are inlined as SQL literals: a CHECK cannot take query parameters.

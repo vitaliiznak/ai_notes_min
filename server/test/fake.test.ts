@@ -1,19 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { createFakeProvider } from "../src/ai/fake.js";
-import { toSummary, toTags } from "../src/notes/enrichment.js";
-import { SUMMARY_MIN_CONTENT } from "../src/notes/limits.js";
+import { acceptSummary, acceptTags } from "../src/notes/ai-output.js";
+import { SUMMARY_MIN_CONTENT } from "../src/shared/rules.js";
 
 describe("fake provider tags", () => {
   it("returns one fallback tag when the note has no usable word", async () => {
     const output = await createFakeProvider().generateTags({ title: "Hi", content: "ok" });
 
-    expect(toTags(output)).toEqual(["fake-ai"]);
+    expect(acceptTags(output)).toEqual(["fake-ai"]);
   });
 
   it("returns the note's own word, without padding", async () => {
     const output = await createFakeProvider().generateTags({ title: "Postgres", content: "postgres" });
 
-    expect(toTags(output)).toEqual(["postgres"]);
+    expect(acceptTags(output)).toEqual(["postgres"]);
   });
 });
 
@@ -24,7 +24,7 @@ describe("fake provider summary", () => {
 
     const summary = `[fake AI] Summary of "${"t".repeat(40)}". Begins: "${"word ".repeat(28)}…"`;
     expect(output.summary).toBe(summary);
-    expect(toSummary(output, note.content)).toBe(summary);
+    expect(acceptSummary(output, note.content)).toBe(summary);
   });
 });
 
@@ -33,9 +33,9 @@ describe("fake provider summary and tags", () => {
     const note = { title: "Postgres upgrade", content: "Upgrade postgres on friday. ".repeat(20) };
     const output = await createFakeProvider().summarizeAndTag(note);
 
-    expect(toTags(output)).toEqual(["postgres", "upgrade", "friday"]);
+    expect(acceptTags(output)).toEqual(["postgres", "upgrade", "friday"]);
     const summary = `[fake AI] Summary of "Postgres upgrade". Begins: "${"Upgrade postgres on friday. ".repeat(5)}…"`;
     expect(output.summary).toBe(summary);
-    expect(toSummary(output, note.content)).toBe(summary);
+    expect(acceptSummary(output, note.content)).toBe(summary);
   });
 });

@@ -1,0 +1,63 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug server",
+      "type": "node",
+      "request": "launch",
+      "cwd": "${workspaceFolder}/server",
+      "program": "${workspaceFolder}/server/src/index.ts",
+      "runtimeArgs": ["--import", "tsx", "--env-file-if-exists=${workspaceFolder}/.env"],
+      "preLaunchTask": "Start database",
+      "skipFiles": ["<node_internals>/**"],
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Debug web",
+      "type": "node",
+      "request": "launch",
+      "cwd": "${workspaceFolder}/web",
+      "program": "${workspaceFolder}/node_modules/vite/bin/vite.js",
+      "env": { "NO_COLOR": "1" },
+      "skipFiles": ["<node_internals>/**", "**/node_modules/**"],
+      "console": "integratedTerminal",
+      "serverReadyAction": {
+        "action": "debugWithChrome",
+        "pattern": "http://localhost:5173",
+        "uriFormat": "http://localhost:5173",
+        "webRoot": "${workspaceFolder}/web"
+      }
+    },
+    {
+      "name": "Debug server test",
+      "type": "node",
+      "request": "launch",
+      "cwd": "${workspaceFolder}/server",
+      "program": "${workspaceFolder}/node_modules/vitest/vitest.mjs",
+      "preLaunchTask": "Start database",
+      "args": ["run", "${file}"],
+      "skipFiles": ["<node_internals>/**", "**/node_modules/**"],
+      "smartStep": true,
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Debug web test",
+      "type": "node",
+      "request": "launch",
+      "cwd": "${workspaceFolder}/web",
+      "program": "${workspaceFolder}/node_modules/vitest/vitest.mjs",
+      "args": ["run", "${file}"],
+      "skipFiles": ["<node_internals>/**", "**/node_modules/**"],
+      "smartStep": true,
+      "console": "integratedTerminal"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Debug app",
+      "configurations": ["Debug server", "Debug web"],
+      "preLaunchTask": "Start database",
+      "stopAll": true
+    }
+  ]
+}

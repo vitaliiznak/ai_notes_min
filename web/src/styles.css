@@ -292,7 +292,7 @@ button[aria-busy="true"] { cursor: progress; }
   justify-items: start;
   padding: 22px;
 }
-/* Placeholder bars. Each variant class sizes its own bars. */
+/* Skeleton bars. Each variant class sizes its own bars. */
 .skeleton { display: grid; gap: 8px; }
 .skeleton span {
   display: block;
@@ -405,7 +405,7 @@ button[aria-busy="true"] { cursor: progress; }
   line-height: 1.45;
 }
 .ai-plan .sparkle { margin-top: 2px; }
-.ai-plan.is-summarized { background: var(--accent-soft); color: var(--tag-ink); }
+.ai-plan.is-summarizable { background: var(--accent-soft); color: var(--tag-ink); }
 .ai-plan-count { font-variant-numeric: tabular-nums; }
 .composer-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 

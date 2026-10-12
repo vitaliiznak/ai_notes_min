@@ -1,17 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { api, canSummarize, errorMessage, SUMMARY_MIN_CONTENT, type AiField, type AiPreview, type Note } from "../api";
+import { api, errorMessage } from "../api";
 import { formatNoteTime } from "../format";
 import { noteQuery } from "../queries";
+import { canSummarize, SUMMARY_MIN_CONTENT, type AiField, type AiPreview, type Note } from "../shared";
 import { useTagFilter } from "../tag-filter";
 import { BackLink } from "./BackLink";
-import { DeleteNotes } from "./DeleteNotes";
+import { DeleteNote } from "./DeleteNotes";
 import { RefreshIcon, Sparkle } from "./icons";
-import { Placeholder } from "./Placeholder";
+import { Skeleton } from "./Skeleton";
 import { Tags } from "./Tags";
 
 // Moves focus to the heading once the note is shown, so a screen reader starts there.
-const focus = (heading: HTMLHeadingElement | null) => heading?.focus();
+const focusOnMount = (heading: HTMLHeadingElement | null) => heading?.focus();
 
 export function NoteDetail({ id }: { id: string }) {
   const { data: note, error, isPending, isFetching, refetch } = useQuery(noteQuery(id));
@@ -25,7 +26,7 @@ export function NoteDetail({ id }: { id: string }) {
             <p className="visually-hidden" role="status">
               Loading note…
             </p>
-            <Placeholder className="panel note note-skeleton" />
+            <Skeleton className="panel note note-skeleton" />
           </>
         ) : (
           <div className="panel note-status">
@@ -41,7 +42,7 @@ export function NoteDetail({ id }: { id: string }) {
     );
   }
 
-  const summarized = canSummarize(note.content);
+  const summarizable = canSummarize(note.content);
 
   return (
     <div className="read">
@@ -49,14 +50,14 @@ export function NoteDetail({ id }: { id: string }) {
       <BackLink />
       <article className="panel note">
         <header className="note-header">
-          <h2 ref={focus} tabIndex={-1}>
+          <h2 ref={focusOnMount} tabIndex={-1}>
             {note.title}
           </h2>
           <p className="note-meta">
             <time className="nowrap" dateTime={note.createdAt}>
               {formatNoteTime(note.createdAt, "full")}
             </time>
-            {!summarized && (
+            {!summarizable && (
               <>
                 {" "}
                 <span className="nowrap">· No summary under {SUMMARY_MIN_CONTENT} characters</span>
@@ -65,86 +66,88 @@ export function NoteDetail({ id }: { id: string }) {
           </p>
           <TagsRow note={note} />
         </header>
-        {summarized && <SummaryCard note={note} />}
+        {summarizable && <SummaryCard note={note} />}
         <div className="note-body">
           <h3 className="visually-hidden">Note</h3>
           <div className="note-content">{note.content}</div>
         </div>
-        <DeleteNotes id={id} />
+        <DeleteNote id={id} />
       </article>
     </div>
   );
 }
 
 /**
- * One AI result for this note. A missing one is requested on mount: for a new note the
+ * One AI field of this note. A missing one is requested on mount: for a new note the
  * server is already generating it, so the request joins that call and streams its text.
- * Regenerate and Try again only show while nothing is running, so runs never overlap.
+ * Regenerate and Try again only show while nothing is running, so calls never overlap.
  */
-function useAiResult(note: Note, field: AiField) {
+function useAiField(note: Note, field: AiField) {
   const queryClient = useQueryClient();
   const tagFilter = useTagFilter();
-  // The text so far, while the model writes it.
-  const [draft, setDraft] = useState<AiPreview | null>(null);
+  // The field so far, while the model writes it.
+  const [preview, setPreview] = useState<AiPreview | null>(null);
   const generate = useMutation({
-    mutationFn: (regenerate: boolean) => api.generate(note.id, field, regenerate, setDraft),
+    mutationFn: (regenerate: boolean) => api.generate(note.id, field, { regenerate, onPreview: setPreview }),
     // Also after the reader has gone back to the list: the cache and the sidebar still take it.
-    onSuccess: (next) => {
+    onSuccess: (result) => {
       // A filter by a tag the note no longer has would hide the note being read.
       const { tag } = tagFilter;
-      if (field === "tags" && tag && note.tags?.includes(tag) && !next.tags?.includes(tag)) tagFilter.clear();
-      // Summary and tags finish independently. Take only this field, so a slower response
-      // carrying the other field's older value can't erase it.
-      queryClient.setQueryData(noteQuery(note.id).queryKey, (current) => ({ ...(current ?? next), [field]: next[field] }));
+      if ("tags" in result && tag && note.tags?.includes(tag) && !result.tags.includes(tag)) tagFilter.clear();
+      // The result is this field alone. With no cached note there is nothing to merge it into; the next read gets the row.
+      queryClient.setQueryData(noteQuery(note.id).queryKey, (current) => current && { ...current, ...result });
     },
-    onSettled: () => setDraft(null),
+    onSettled: () => setPreview(null),
   });
   const missing = note[field] === null;
 
   // Once per note (NoteDetail is keyed by note id). Leaving the page keeps the request open.
   useEffect(() => {
     if (missing) generate.mutate(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- generate is a new object each render; missing flips when the result lands
   }, []);
 
   return {
     // Busy from the first paint when missing, before the effect has started the request.
     pending: generate.isPending || (missing && generate.isIdle),
     error: generate.error ? errorMessage(generate.error) : null,
-    draft,
-    // Announces a new result to screen readers.
-    status: generate.isSuccess ? "status" : undefined,
+    preview,
+    // The role that announces a new result to screen readers.
+    liveRole: generate.isSuccess ? "status" : undefined,
     hasResult: !missing,
-    run: (regenerate: boolean) => generate.mutate(regenerate),
+    regenerate: () => generate.mutate(true),
+    // Repeats what failed: a regenerate when there was a result, else the first generate.
+    retry: () => generate.mutate(!missing),
   };
 }
 
-type AiResult = ReturnType<typeof useAiResult>;
+type AiFieldState = ReturnType<typeof useAiField>;
 
-// The run in progress, or, once there is a result, a button to run it again.
-function AiAction({ ai, working, regenerate }: { ai: AiResult; working: string; regenerate: string }) {
+// The call in progress, or, once there is a result, a button to regenerate it.
+function AiAction({ ai, workingLabel, regenerateLabel }: { ai: AiFieldState; workingLabel: string; regenerateLabel: string }) {
   if (ai.pending) {
     return (
       <span className="ai-status">
         <span className="spinner" aria-hidden="true" />
-        {working}
+        {workingLabel}
       </span>
     );
   }
   return (
     ai.hasResult && (
-      <button type="button" className="icon-button" onClick={() => ai.run(true)} aria-label={regenerate} title={regenerate}>
+      <button type="button" className="icon-button" onClick={ai.regenerate} aria-label={regenerateLabel} title={regenerateLabel}>
         <RefreshIcon />
       </button>
     )
   );
 }
 
-function AiError({ ai }: { ai: AiResult }) {
+function AiErrorBanner({ ai }: { ai: AiFieldState }) {
   return (
     ai.error && (
       <div className="error-banner" role="alert">
         <p>{ai.error}</p>
-        <button type="button" className="button-ghost" onClick={() => ai.run(ai.hasResult)}>
+        <button type="button" className="button-ghost" onClick={ai.retry}>
           Try again
         </button>
       </div>
@@ -154,29 +157,29 @@ function AiError({ ai }: { ai: AiResult }) {
 
 // Tags sit under the date as a light row: they are labels for the note, not a section of it.
 function TagsRow({ note }: { note: Note }) {
-  const { tag: activeTag, show } = useTagFilter();
-  const ai = useAiResult(note, "tags");
-  const tags = ai.draft?.tags ?? note.tags ?? [];
-  const streaming = ai.draft !== null;
+  const { tag: activeTag, filterBy } = useTagFilter();
+  const ai = useAiField(note, "tags");
+  const tags = ai.preview?.tags ?? note.tags ?? [];
+  const streaming = ai.preview !== null;
 
   return (
-    <div className="note-tags" aria-busy={ai.pending} role={ai.status}>
+    <div className="note-tags" aria-busy={ai.pending} role={ai.liveRole}>
       <Sparkle />
       {tags.length > 0 ? (
-        <Tags tags={tags} active={streaming ? null : activeTag} onSelect={streaming ? undefined : show} />
+        <Tags tags={tags} active={streaming ? null : activeTag} onSelect={streaming ? undefined : filterBy} />
       ) : (
-        ai.pending && <Placeholder className="tag-skeleton" />
+        ai.pending && <Skeleton className="tag-skeleton" />
       )}
-      <AiAction ai={ai} working="Tagging…" regenerate="Regenerate tags" />
-      <AiError ai={ai} />
+      <AiAction ai={ai} workingLabel="Tagging…" regenerateLabel="Regenerate tags" />
+      <AiErrorBanner ai={ai} />
     </div>
   );
 }
 
 function SummaryCard({ note }: { note: Note }) {
-  const ai = useAiResult(note, "summary");
-  const text = ai.draft?.summary ?? note.summary;
-  const streaming = ai.draft !== null;
+  const ai = useAiField(note, "summary");
+  const text = ai.preview?.summary ?? note.summary;
+  const streaming = ai.preview !== null;
 
   return (
     <section className="ai" aria-busy={ai.pending}>
@@ -184,16 +187,16 @@ function SummaryCard({ note }: { note: Note }) {
         <h3>
           <Sparkle /> Summary
         </h3>
-        <AiAction ai={ai} working="Summarizing…" regenerate="Regenerate summary" />
+        <AiAction ai={ai} workingLabel="Summarizing…" regenerateLabel="Regenerate summary" />
       </div>
       {text !== null ? (
-        <p className={streaming ? "summary-text is-streaming" : "summary-text"} role={ai.status}>
+        <p className={streaming ? "summary-text is-streaming" : "summary-text"} role={ai.liveRole}>
           {text}
         </p>
       ) : (
-        ai.pending && <Placeholder className="ai-skeleton" />
+        ai.pending && <Skeleton className="ai-skeleton" />
       )}
-      <AiError ai={ai} />
+      <AiErrorBanner ai={ai} />
     </section>
   );
 }

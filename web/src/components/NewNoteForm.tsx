@@ -2,12 +2,15 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 // v4 falls back to getRandomValues where crypto.randomUUID is missing: it needs HTTPS, and the cluster deploy is plain HTTP.
 import { v4 as newIdempotencyKey } from "uuid";
-import { api, canSummarize, charLength, errorMessage, normalizeUserText, SUMMARY_MIN_CONTENT } from "../api";
+import { api, errorMessage } from "../api";
 import { noteQuery } from "../queries";
+import { href, navigate } from "../routes";
+import { SAMPLE_NOTES } from "../samples";
+import { canSummarize, charLength, SUMMARY_MIN_CONTENT, trimPadding } from "../shared";
 import { useTagFilter } from "../tag-filter";
 import { BackLink } from "./BackLink";
 import { Sparkle } from "./icons";
-import { SAMPLE_NOTES, SampleGallery } from "./SampleNotes";
+import { SampleGallery } from "./SampleGallery";
 
 interface Draft {
   title: string;
@@ -20,14 +23,14 @@ interface Draft {
 }
 
 // Says before saving what the AI will do with this note, so a missing summary is never a surprise.
-function AiOnSave({ content }: { content: string }) {
+function AiPlanNotice({ content }: { content: string }) {
   const length = charLength(content);
   const remaining = SUMMARY_MIN_CONTENT - length;
-  const summarized = canSummarize(content);
+  const summarizable = canSummarize(content);
   return (
-    <p className={summarized ? "ai-plan is-summarized" : "ai-plan"}>
+    <p className={summarizable ? "ai-plan is-summarizable" : "ai-plan"}>
       <Sparkle />
-      {summarized ? (
+      {summarizable ? (
         <span>AI will tag and summarize this note when you save.</span>
       ) : (
         <span>
@@ -49,13 +52,13 @@ export function NewNoteForm() {
     onSuccess: (note) => {
       queryClient.setQueryData(noteQuery(note.id).queryKey, note);
       clearTag();
-      window.location.hash = `#/notes/${note.id}`;
+      navigate(href.note(note.id));
     },
   });
   const saving = create.isPending;
 
-  const storedTitle = normalizeUserText(title);
-  const storedContent = normalizeUserText(content);
+  const storedTitle = trimPadding(title);
+  const storedContent = trimPadding(content);
   const hasText = storedTitle.length > 0 && storedContent.length > 0;
   const dirty = storedTitle.length > 0 || storedContent.length > 0;
   // Samples stay on offer until the person writes their own text, so they can switch between them.
@@ -88,6 +91,7 @@ export function NewNoteForm() {
       )}
       <div className="panel composer-sheet">
         <h2 className="visually-hidden">New note</h2>
+        {/* eslint-disable jsx-a11y/no-autofocus -- this route is the composer, so the title is where typing starts */}
         <input
           className="title-input"
           aria-label="Title"
@@ -99,6 +103,7 @@ export function NewNoteForm() {
           autoComplete="off"
           placeholder="Title"
         />
+        {/* eslint-enable jsx-a11y/no-autofocus */}
         <textarea
           aria-label="Note"
           value={content}
@@ -108,14 +113,14 @@ export function NewNoteForm() {
           required
           placeholder={showSamples ? "Write your note, or pick a test sample above…" : "Write your note…"}
         />
-        <AiOnSave content={storedContent} />
+        <AiPlanNotice content={storedContent} />
         {create.error && (
           <p className="error-banner" role="alert">
             {errorMessage(create.error)}
           </p>
         )}
         <div className="composer-actions">
-          <a className="button button-ghost" href="#/" aria-disabled={saving || undefined}>
+          <a className="button button-ghost" href={href.home} aria-disabled={saving || undefined}>
             {dirty ? "Discard" : "Cancel"}
           </a>
           <button type="submit" disabled={!hasText || saving} aria-busy={saving}>

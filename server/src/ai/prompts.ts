@@ -1,4 +1,4 @@
-import { summaryCharLimit, TAG_MAX_LENGTH, TAGS_MAX } from "../notes/limits.js";
+import { summaryCharLimit, TAG_MAX_LENGTH, TAGS_MAX } from "../shared/rules.js";
 import type { NoteText } from "./provider.js";
 
 const DATA_NOT_INSTRUCTIONS =

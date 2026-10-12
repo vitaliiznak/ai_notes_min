@@ -28,6 +28,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: npm run lint
       - run: npm run typecheck
       # table.ts and the committed migrations must agree: generating again must change nothing.
       - run: npm run db:generate -w server && test -z "$(git status --porcelain server/drizzle)"

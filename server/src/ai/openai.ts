@@ -2,7 +2,7 @@ import OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
 import { ZodError, type z } from "zod";
 import { renderNote, renderSummaryInput, SUMMARY_AND_TAGS_SYSTEM, SUMMARY_SYSTEM, TAGS_SYSTEM } from "./prompts.js";
-import { AiError, SummaryAndTagsOutput, SummaryOutput, TagsOutput, type AiProvider, type OnText } from "./provider.js";
+import { AI_MAX_RETRIES, AiError, SummaryAndTagsOutput, SummaryOutput, TagsOutput, type AiProvider, type OnText } from "./provider.js";
 
 interface OpenAiProviderOptions {
   model: string;
@@ -13,11 +13,10 @@ interface OpenAiProviderOptions {
 }
 
 export function createOpenAiProvider(opts: OpenAiProviderOptions): AiProvider {
-  const client =
-    // One retry. drainBudgetMs in config.ts counts on at most two attempts.
-    opts.client ?? new OpenAI({ apiKey: opts.apiKey, timeout: opts.timeoutMs, maxRetries: 1 });
+  const client = opts.client ?? new OpenAI({ apiKey: opts.apiKey, timeout: opts.timeoutMs, maxRetries: AI_MAX_RETRIES });
 
-  async function run<S extends z.ZodType>(
+  /** One streamed request whose output must match `schema`. `name` is the schema's name and the log line's task. */
+  async function callStructured<S extends z.ZodType>(
     name: string,
     instructions: string,
     schema: S,
@@ -66,10 +65,10 @@ export function createOpenAiProvider(opts: OpenAiProviderOptions): AiProvider {
   }
 
   return {
-    summarize: (note, onText) => run("note_summary", SUMMARY_SYSTEM, SummaryOutput, renderSummaryInput(note), onText),
-    generateTags: (note, onText) => run("note_tags", TAGS_SYSTEM, TagsOutput, renderNote(note), onText),
+    summarize: (note, onText) => callStructured("note_summary", SUMMARY_SYSTEM, SummaryOutput, renderSummaryInput(note), onText),
+    generateTags: (note, onText) => callStructured("note_tags", TAGS_SYSTEM, TagsOutput, renderNote(note), onText),
     summarizeAndTag: (note, onText) =>
-      run("note_summary_and_tags", SUMMARY_AND_TAGS_SYSTEM, SummaryAndTagsOutput, renderSummaryInput(note), onText),
+      callStructured("note_summary_and_tags", SUMMARY_AND_TAGS_SYSTEM, SummaryAndTagsOutput, renderSummaryInput(note), onText),
   };
 }
 

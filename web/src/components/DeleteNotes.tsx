@@ -1,28 +1,36 @@
 import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
 import { api, errorMessage } from "../api";
+import { href, navigate } from "../routes";
 import { useTagFilter } from "../tag-filter";
 
-/** Deletes the note with this id, or every note without one. Either way it ends on the list. */
-export function DeleteNotes({ id }: { id?: string }) {
-  const { clear: clearTag } = useTagFilter();
+interface ConfirmDeleteProps {
+  label: string;
+  question: string;
+  /** A word to type before the delete is enabled, for a delete that reaches past what is on screen. */
+  typeToConfirm?: string;
+  remove: () => Promise<unknown>;
+  onDeleted?: () => void;
+}
+
+/** A delete button that asks first. Either way it ends on the list. */
+function ConfirmDelete({ label, question, typeToConfirm, remove, onDeleted }: ConfirmDeleteProps) {
   const [confirming, setConfirming] = useState(false);
-  const [confirmation, setConfirmation] = useState("");
-  const remove = useMutation({
-    mutationFn: () => (id ? api.deleteNote(id) : api.deleteAllNotes()),
+  const [typed, setTyped] = useState("");
+  const deletion = useMutation({
+    mutationFn: remove,
     onSuccess: () => {
       close();
-      if (!id) clearTag();
-      window.location.hash = "#/";
+      onDeleted?.();
+      navigate(href.home);
     },
   });
-  const label = id ? "Delete note" : "Delete all notes";
-  const pending = remove.isPending;
+  const pending = deletion.isPending;
 
   function close() {
     setConfirming(false);
-    setConfirmation("");
-    remove.reset();
+    setTyped("");
+    deletion.reset();
   }
 
   return (
@@ -33,26 +41,18 @@ export function DeleteNotes({ id }: { id?: string }) {
         </button>
       ) : (
         <div className="delete-confirmation" role="group" aria-label={label}>
-          <p>
-            {id ? "Permanently delete this note?" : "Permanently delete every note, including notes hidden by a tag filter?"}{" "}
-            This cannot be undone.
-          </p>
-          {!id && (
+          <p>{question} This cannot be undone.</p>
+          {typeToConfirm && (
             <label>
-              Type DELETE to confirm
-              <input
-                value={confirmation}
-                onChange={(e) => setConfirmation(e.target.value)}
-                disabled={pending}
-                autoComplete="off"
-              />
+              Type {typeToConfirm} to confirm
+              <input value={typed} onChange={(e) => setTyped(e.target.value)} disabled={pending} autoComplete="off" />
             </label>
           )}
           <div className="delete-actions">
             <button
               className="danger"
-              disabled={pending || (!id && confirmation !== "DELETE")}
-              onClick={() => remove.mutate()}
+              disabled={pending || (typeToConfirm !== undefined && typed !== typeToConfirm)}
+              onClick={() => deletion.mutate()}
             >
               {pending ? "Deleting…" : label}
             </button>
@@ -62,11 +62,28 @@ export function DeleteNotes({ id }: { id?: string }) {
           </div>
         </div>
       )}
-      {remove.error && (
+      {deletion.error && (
         <p className="error-banner" role="alert">
-          {errorMessage(remove.error)}
+          {errorMessage(deletion.error)}
         </p>
       )}
     </div>
+  );
+}
+
+export function DeleteNote({ id }: { id: string }) {
+  return <ConfirmDelete label="Delete note" question="Permanently delete this note?" remove={() => api.deleteNote(id)} />;
+}
+
+export function DeleteAllNotes() {
+  const { clear: clearTag } = useTagFilter();
+  return (
+    <ConfirmDelete
+      label="Delete all notes"
+      question="Permanently delete every note, including notes hidden by a tag filter?"
+      typeToConfirm="DELETE"
+      remove={api.deleteAllNotes}
+      onDeleted={clearTag}
+    />
   );
 }
